@@ -13,7 +13,7 @@ from collections import defaultdict
 from PIL import Image, ImageDraw, ImageFont
 from pyrogram import Client, filters
 from pyrogram.enums import ChatType, ChatMemberStatus, ParseMode
-from pyrogram.errors import MessageNotModified, RPCError
+from pyrogram.errors import MessageNotModified, RPCError, ChannelInvalid, ChannelPrivate, PeerIdInvalid, UserIsBlocked
 from pyrogram.types import (
     InlineKeyboardMarkup,
     InlineKeyboardButton,
@@ -298,11 +298,10 @@ for row in custom_rows:
         WORDS[diff].append(w)
 
 EVENT_WORDS = [row["word"] for row in DB.execute("SELECT word FROM event_words").fetchall()]
-
 EVENT_WIZARD = {}
 
 # ============================================================
-# HELPERS & SYSTEM UTILS
+# HELPERS, EXP & POWER SYSTEMS
 # ============================================================
 
 def ensure_user(user):
@@ -596,6 +595,9 @@ async def start_game(chat_id, difficulty, message_or_chat):
             await sent.pin(disable_notification=True)
         except Exception:
             pass
+    except (ChannelInvalid, ChannelPrivate, PeerIdInvalid, UserIsBlocked):
+        DB.execute("UPDATE settings SET is_active=0 WHERE chat_id=?", (chat_id,))
+        DB.commit()
     except Exception as e:
         print(f"Error sending puzzle to {chat_id}: {e}")
 
@@ -652,7 +654,9 @@ async def dispatch_event_by_id(event_id, target_chat_id=None):
     expires = now + 180
 
     targets = []
-    if ev["target_type"] == "dm":
+    if target_chat_id:
+        targets = [target_chat_id]
+    elif ev["target_type"] == "dm":
         users = DB.execute("SELECT user_id FROM users").fetchall()
         targets = [u["user_id"] for u in users]
     elif ev["target_type"] == "group":
@@ -662,9 +666,6 @@ async def dispatch_event_by_id(event_id, target_chat_id=None):
         users = DB.execute("SELECT user_id FROM users").fetchall()
         s_rows = DB.execute("SELECT chat_id FROM settings WHERE is_active=1 AND event_active=1 AND chat_id != 0").fetchall()
         targets = [u["user_id"] for u in users] + [r["chat_id"] for r in s_rows]
-
-    if target_chat_id:
-        targets = [target_chat_id]
 
     image = make_puzzle_image(jumbled, ev["title"], puzzle_id, exp_val=ev["reward_exp"], is_event=True)
     hint_text = f"\n💡 <b>Hint:</b> <code>{ev['hint']}</code>" if ev["hint"] and ev["hint"] != "0" else ""
@@ -693,6 +694,9 @@ async def dispatch_event_by_id(event_id, target_chat_id=None):
             DB.commit()
 
             asyncio.create_task(expire_event_game(tid, puzzle_id, expires))
+        except (ChannelInvalid, ChannelPrivate, PeerIdInvalid, UserIsBlocked):
+            DB.execute("UPDATE settings SET is_active=0, event_active=0 WHERE chat_id=?", (tid,))
+            DB.commit()
         except Exception as e:
             print(f"Error dispatching event to {tid}: {e}")
 
@@ -1023,18 +1027,18 @@ async def finish_fight(chat_id):
         asyncio.create_task(start_game(chat_id, s["default_diff"], chat_id))
 
 # ============================================================
-# DATABASE BACKUP SYSTEM
+# DATABASE BACKUP SYSTEM (MANUAL & AUTO BACKUP)
 # ============================================================
 
 @app.on_message(filters.command(["backup", "dbbackup", "getdb"]))
 async def backup_db_cmd(_, message: Message):
     if not message.from_user or not is_owner(message.from_user.id):
-        return await message.reply_text("<blockquote>❌ <b>Sirf Bot Owner database backup le sakta hai.</b></blockquote>", parse_mode=ParseMode.HTML)
+        return await message.reply_text("❌ Sirf Bot Owner database backup le sakta hai.")
 
     if not os.path.exists("jumble_game.db"):
-        return await message.reply_text("<blockquote>❌ <b>Database file nahi mili!</b></blockquote>", parse_mode=ParseMode.HTML)
+        return await message.reply_text("❌ Database file nahi mili!")
 
-    status_msg = await message.reply_text("<blockquote>📦 <i>Exporting database backup...</i></blockquote>", parse_mode=ParseMode.HTML)
+    status_msg = await message.reply_text("📦 <i>Exporting database backup...</i>", parse_mode=ParseMode.HTML)
     try:
         await message.reply_document(
             document="jumble_game.db",
@@ -1047,7 +1051,7 @@ async def backup_db_cmd(_, message: Message):
         )
         await status_msg.delete()
     except Exception as e:
-        await status_msg.edit_text(f"<blockquote>❌ Backup failed: <code>{str(e)}</code></blockquote>", parse_mode=ParseMode.HTML)
+        await status_msg.edit_text(f"❌ Backup failed: <code>{str(e)}</code>")
 
 async def auto_backup_task():
     while True:
@@ -1066,6 +1070,442 @@ async def auto_backup_task():
                 )
         except Exception as e:
             print(f"Auto-backup error: {e}")
+
+# ============================================================
+# COMMAND HANDLERS & WIZARD BUILDERS
+# ============================================================
+
+@app.on_message(filters.command("start"))
+async def start_cmd(_, message: Message):
+    ensure_user(message.from_user)
+    text = (
+        "<blockquote>🧩 <b>𝐖ᴇʟᴄᴏᴍᴇ 𝐓ᴏ 𝐀ᴅᴠᴀɴᴄᴇᴅ 𝐉ᴜᴍʙʟᴇ 𝐁ᴏᴛ!</b></blockquote>\n\n"
+        "<blockquote>🎮 <b>𝐆ᴀᴍᴇ 𝐂ᴏᴍᴍᴀɴᴅs:</b>\n"
+        "• <code>/jumble</code> — 𝐒ᴛᴀʀᴛ 𝐀ᴜᴛᴏ-ʟᴏᴏᴘ 𝐉ᴜᴍʙʟᴇ 𝐆ᴀᴍᴇ\n"
+        "• <code>/jumblefight @user</code> — 1v1 𝐁ᴀᴛᴛʟᴇ 𝐌ᴏᴅᴇ\n"
+        "• <code>/jumblebetfight [mode] [amount] @user</code> — 1v1 𝐁ᴇᴛ 𝐁ᴀᴛᴛʟᴇ\n"
+        "• <code>/shop</code> — 𝐏ᴏᴡᴇʀ 𝐂ᴀʀᴅ 𝐒ʜᴏᴘ\n"
+        "• <code>/eventlist</code> — 𝐀ᴄᴛɪᴠᴇ 𝐌ʏsᴛᴇʀʏ 𝐄ᴠᴇɴᴛs\n"
+        "• <code>/settings</code> — 𝐀ᴅᴍɪɴ 𝐏ᴀɴᴇʟ</blockquote>\n\n"
+        "<blockquote>🎁 <b>𝐅ʀᴇᴇ 𝐏ᴏɪɴᴛs & 𝐑ᴇᴡᴀʀᴅs:</b>\n"
+        "• <code>/daily</code> — 𝐂ʟᴀɪᴍ 𝐃ᴀɪʟʏ 𝐁ᴏɴᴜs (𝐃𝐌 ᴏɴʟʏ)\n"
+        "• <code>/bonus</code> — 𝐂ʟᴀɪᴍ 𝐆ʀᴏᴜᴘ 𝐀ᴅᴅɪᴛɪᴏɴ 𝐁ᴏɴᴜs</blockquote>\n\n"
+        "<blockquote>📊 <b>𝐒ᴛᴀᴛs & 𝐑ᴀɴᴋɪɴɢs:</b>\n"
+        "• <code>/stats [@user / ID]</code> — 𝐘ᴏᴜʀ ᴏʀ 𝐀ɴʏᴏɴᴇ's 𝐒ᴛᴀᴛs & 𝐋ᴇᴠᴇʟ\n"
+        "• <code>/leaderboard</code> — 𝐓ᴏᴘ 𝐏ʟᴀʏᴇʀs 𝐑ᴀɴᴋs</blockquote>"
+    )
+
+    dm_markup = InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton("💬 𝐒ᴜᴘᴘᴏʀᴛ", url=SUPPORT_GC),
+            InlineKeyboardButton("➕ 𝐀ᴅᴅ 𝐌ᴇ", url=ADD_ME_URL)
+        ],
+        [
+            InlineKeyboardButton("🛍️ 𝐎ᴘᴇɴ 𝐒ʜᴏᴘ", callback_data="open_shop_btn"),
+            InlineKeyboardButton("📅 𝐄ᴠᴇɴᴛ 𝐋ɪsᴛ", callback_data="open_eventlist_btn")
+        ]
+    ])
+
+    if message.chat.type in (ChatType.PRIVATE,):
+        try:
+            await message.reply_photo(photo=START_IMG, caption=text, reply_markup=dm_markup, parse_mode=ParseMode.HTML)
+        except Exception:
+            await message.reply_text(text, reply_markup=dm_markup, parse_mode=ParseMode.HTML)
+    else:
+        await message.reply_text(text, reply_markup=dm_markup, parse_mode=ParseMode.HTML)
+
+@app.on_message(filters.command("help"))
+async def help_cmd(_, message: Message):
+    is_user_auth = is_authed(message.from_user.id) if message.from_user else False
+    text = (
+        "<blockquote>🧩 <b>𝐉ᴜᴍʙʟᴇ 𝐂ᴏᴍᴍᴀɴᴅs 𝐆ᴜɪᴅᴇ</b>\n\n"
+        "• <code>/jumble</code> — 𝐒ᴛᴀʀᴛ ᴀᴜᴛᴏ-ʟᴏᴏᴘɪɴɢ ᴊᴜᴍʙʟᴇ ɢᴀᴍᴇ\n"
+        "• <code>/jumblefight @user</code> — 1v1 ʙᴀᴛᴛʟᴇ ᴍᴀᴛᴄʜ\n"
+        "• <code>/jumblebetfight [mode] [amount] @user</code> — 1v1 ʙᴇᴛ ᴍᴀᴛᴄʜ\n"
+        "• <code>/shop</code> — 𝐏ᴏᴡᴇʀ 𝐂ᴀʀᴅ 𝐒ʜᴏᴘ\n"
+        "• <code>/eventlist</code> — 𝐀ᴄᴛɪᴠᴇ 𝐌ʏsᴛᴇʀʏ 𝐄ᴠᴇɴᴛs\n"
+        "• <code>/stats [@user / ID]</code> — 𝐕ɪᴇᴡ ᴀɴʏ ᴘʟᴀʏᴇʀ's sᴛᴀᴛs\n"
+        "• <code>/settings</code> — 𝐀ᴅᴍɪɴ sᴛᴀʀᴛ/sᴛᴏᴘ & ɢᴀᴍᴇ sᴇᴛᴛɪɴɢs\n"
+        "• <code>/daily</code> — 𝐂ʟᴀɪᴍ ᴅᴀɪʟʏ ᴘᴏɪɴᴛs (𝐃𝐌 ᴏɴʟʏ)\n"
+        "• <code>/bonus</code> — 𝐂ʟᴀɪᴍ ɢʀᴏᴜᴘ ᴀᴅᴍɪɴ ʀᴇᴡᴀʀᴅ (𝐆ʀᴏᴜᴘ ᴏɴʟʏ)\n"
+        "• <code>/leaderboard</code> — 𝐓ᴏᴘ ᴘʟᴀʏᴇʀs ʀᴀɴᴋɪɴɢ</blockquote>"
+    )
+    if is_user_auth:
+        text += (
+            "\n\n<blockquote>🔐 <b>𝐀ᴜᴛʜ / 𝐀ᴅᴍɪɴ 𝐂ᴏᴍᴍᴀɴᴅs:</b>\n"
+            "• <code>/setcard [point|exp] [price] [hours] [min_lvl]</code> — Configure Shop Cards\n"
+            "• <code>/setexp [easy|medium|hard] [exp]</code> — Set Mode EXP\n"
+            "• <code>/setevent</code> — <b>Step-by-step Interactive Event Creator Wizard</b>\n"
+            "• <code>/startevent</code> / <code>/stopevent</code> — Mystery Event Toggle\n"
+            "• <code>/addeventword word1 word2</code> — Add mystery event words\n"
+            "• <code>/deleventword word</code> — Delete event word\n"
+            "• <code>/eventwords</code> — View event word bank\n"
+            "• <code>/word</code> — 𝐕ɪᴇᴡ ᴄᴀᴛᴇɢᴏʀɪᴢᴇᴅ ᴡᴏʀᴅ ʙᴀɴᴋ\n"
+            "• <code>/addword easy cat dog bird</code> — 𝐁ᴜʟᴋ ᴀᴅᴅ ᴡᴏʀᴅs\n"
+            "• <code>/delword easy word</code> — 𝐃ᴇʟᴇᴛᴇ ᴡᴏʀᴅ ғʀᴏᴍ ʙᴀɴᴋ\n"
+            "• <code>/delallword easy</code> — <b>𝐃ᴇʟᴇᴛᴇ ᴀʟʟ ᴡᴏʀᴅs ᴏғ ᴀ ᴍᴏᴅᴇ</b>\n"
+            "• <code>/setpoints [easy|med|hard] [pts]</code> — 𝐒ᴇᴛ ɢʟᴏʙᴀʟ ᴘᴏɪɴᴛs\n"
+            "• <code>/sethint [easy|med|hard] [hints]</code> — 𝐒ᴇᴛ ɢʟᴏʙᴀʟ ʜɪɴᴛs\n"
+            "• <code>/update</code> — 𝐆ɪᴛ sᴛᴀsʜ, ᴘᴜʟʟ & 𝐀ᴜᴛᴏ-ʀᴇsᴜᴍᴇ</blockquote>"
+        )
+    if message.from_user and is_owner(message.from_user.id):
+        text += (
+            "\n\n<blockquote>👑 <b>𝐎ᴡɴᴇʀ 𝐂ᴏᴍᴍᴀɴᴅs:</b>\n"
+            "• <code>/auth @user</code> — 𝐆ʀᴀɴᴛ ᴀᴜᴛʜ ᴀᴄᴄᴇss\n"
+            "• <code>/unauth @user</code> — 𝐑ᴇᴠᴏᴋᴇ ᴀᴜᴛʜ ᴀᴄᴄᴇss\n"
+            "• <code>/authlist</code> — 𝐋ɪsᴛ ᴏғ ᴀᴜᴛʜᴏʀɪᴢᴇᴅ ᴜsᴇʀs\n"
+            "• <code>/backup</code> — 𝐃ᴏᴡɴʟᴏᴀᴅ 𝐋ᴀᴛᴇsᴛ 𝐃ᴀᴛᴀʙᴀsᴇ (.db)</blockquote>"
+        )
+    await message.reply_text(text, parse_mode=ParseMode.HTML)
+
+# ============================================================
+# INTERACTIVE STEP-BY-STEP EVENT CREATOR WIZARD (/setevent)
+# ============================================================
+
+@app.on_message(filters.command("setevent"))
+async def set_event_wizard_cmd(_, message: Message):
+    if not message.from_user or not is_authed(message.from_user.id):
+        return await message.reply_text("<blockquote>❌ <b>Sirf Owner aur Auth users events create kar sakte hain.</b></blockquote>", parse_mode=ParseMode.HTML)
+
+    uid = message.from_user.id
+    EVENT_WIZARD[uid] = {"step": 1, "title": "", "word": "", "hint": "", "stars": 0, "exp": 0, "interval": 4, "target": "group"}
+
+    await message.reply_text(
+        "<blockquote>🌟 <b>𝐄𝐕𝐄𝐍𝐓 𝐂𝐑𝐄𝐀𝐓𝐎𝐑 𝐖𝐈𝐙𝐀𝐑𝐃 (Step 1/7)</b>\n\n"
+        "Is event ka title ya naam kya rakhna chahte hain? (Jaise: <i>Weekend Mystery Drop</i>)\n\n"
+        "<i>(Cancel karne ke liye <code>/cancel</code> likhein)</i></blockquote>",
+        parse_mode=ParseMode.HTML
+    )
+
+@app.on_message(filters.command("cancel"))
+async def cancel_wizard(_, message: Message):
+    uid = message.from_user.id
+    if uid in EVENT_WIZARD:
+        del EVENT_WIZARD[uid]
+        await message.reply_text("<blockquote>❌ <b>Event creator wizard cancelled.</b></blockquote>", parse_mode=ParseMode.HTML)
+
+# ============================================================
+# SETEXP COMMAND
+# ============================================================
+
+@app.on_message(filters.command("setexp"))
+async def set_exp_cmd(_, message: Message):
+    if not message.from_user or not is_authed(message.from_user.id):
+        return await message.reply_text("<blockquote>❌ <b>Sirf Owner aur Auth users EXP set kar sakte hain.</b></blockquote>", parse_mode=ParseMode.HTML)
+
+    args = message.command[1:]
+    if len(args) < 2:
+        return await message.reply_text(
+            "<blockquote><b>Usage:</b>\n"
+            "<code>/setexp [easy|medium|hard] [exp_amount]</code>\n\n"
+            "<b>Example:</b>\n"
+            "<code>/setexp easy 15</code></blockquote>",
+            parse_mode=ParseMode.HTML
+        )
+
+    diff = args[0].lower()
+    if diff not in ("easy", "medium", "hard"):
+        return await message.reply_text("<blockquote>❌ <b>Mode must be:</b> <code>easy</code>, <code>medium</code>, ya <code>hard</code>.</blockquote>", parse_mode=ParseMode.HTML)
+
+    clean_num = "".join(c for c in args[1] if c.isdigit())
+    if not clean_num:
+        return await message.reply_text("<blockquote>❌ <b>Invalid number.</b></blockquote>", parse_mode=ParseMode.HTML)
+
+    val = int(clean_num)
+    set_global_config(f"exp_{diff}", val)
+    await message.reply_text(f"<blockquote>✅ <b>{diff.title()} mode EXP reward set to <code>{val} EXP</code>!</b></blockquote>", parse_mode=ParseMode.HTML)
+
+# ============================================================
+# EVENT LIST COMMAND
+# ============================================================
+
+@app.on_message(filters.command(["eventlist", "events"]))
+async def event_list_cmd(_, message: Message):
+    events = DB.execute("SELECT * FROM events_bank WHERE is_active=1").fetchall()
+    if not events:
+        return await message.reply_text("<blockquote>📅 <b>Active Events List:</b>\n\n<i>Filhaal koi active mystery events configured nahi hain.</i></blockquote>", parse_mode=ParseMode.HTML)
+
+    text = "<blockquote>📅 <b>𝐀𝐂𝐓𝐈𝐕𝐄 𝐌𝐘𝐒𝐓𝐄𝐑𝐘 𝐄𝐕𝐄𝐍𝐓𝐒 𝐋𝐈𝐒𝐓</b>\n\n"
+    for ev in events:
+        rem_time = max(0, ev["next_run"] - time.time())
+        text += (
+            f"🔹 <b>{ev['title']}</b> (#ID: {ev['id']})\n"
+            f"• Word: <code>{ev['word'].upper()}</code> | Target: <code>{ev['target_type'].upper()}</code>\n"
+            f"• Reward: ⭐ <code>{ev['reward_stars']} pts</code> | ⚡ <code>{ev['reward_exp']} EXP</code>\n"
+            f"• Repeats: Every <code>{ev['interval_hrs']} hrs</code>\n"
+            f"• Next Run In: <code>{format_duration(rem_time)}</code>\n\n"
+        )
+    text += "</blockquote>"
+
+    kb = InlineKeyboardMarkup([
+        [InlineKeyboardButton("❌ Close", callback_data="close_panel")]
+    ])
+    await message.reply_text(text, reply_markup=kb, parse_mode=ParseMode.HTML)
+
+# ============================================================
+# EVENT WORDS MANAGEMENT & TRIGGER
+# ============================================================
+
+@app.on_message(filters.command("startevent"))
+async def start_event_cmd(_, message: Message):
+    if not message.from_user or not is_authed(message.from_user.id):
+        return await message.reply_text("<blockquote>❌ <b>Authorized users only.</b></blockquote>", parse_mode=ParseMode.HTML)
+
+    chat_id = message.chat.id
+    DB.execute("UPDATE settings SET event_active=1 WHERE chat_id=?", (chat_id,))
+    DB.commit()
+    
+    first_ev = DB.execute("SELECT id FROM events_bank WHERE is_active=1 LIMIT 1").fetchone()
+    if first_ev:
+        await dispatch_event_by_id(first_ev["id"], target_chat_id=chat_id)
+        await message.reply_text("<blockquote>🚀 <b>Event launched instantly in this chat!</b></blockquote>", parse_mode=ParseMode.HTML)
+    else:
+        await message.reply_text("<blockquote>⚠️ <b>Pehle <code>/setevent</code> se kam se kam ek event configure karein!</b></blockquote>", parse_mode=ParseMode.HTML)
+
+@app.on_message(filters.command("stopevent"))
+async def stop_event_cmd(_, message: Message):
+    if not message.from_user or not is_authed(message.from_user.id):
+        return await message.reply_text("<blockquote>❌ <b>Authorized users only.</b></blockquote>", parse_mode=ParseMode.HTML)
+
+    chat_id = message.chat.id
+    DB.execute("UPDATE settings SET event_active=0 WHERE chat_id=?", (chat_id,))
+    DB.commit()
+    await message.reply_text("<blockquote>🛑 <b>Event Word Drops Disabled in this chat.</b></blockquote>", parse_mode=ParseMode.HTML)
+
+@app.on_message(filters.command("addeventword"))
+async def add_event_word_cmd(_, message: Message):
+    if not message.from_user or not is_authed(message.from_user.id):
+        return await message.reply_text("<blockquote>❌ <b>Authorized users only.</b></blockquote>", parse_mode=ParseMode.HTML)
+
+    if len(message.command) < 2:
+        return await message.reply_text("<blockquote><b>Usage:</b>\n<code>/addeventword supernova kaleidoscope cryptocurrency</code></blockquote>", parse_mode=ParseMode.HTML)
+
+    raw_words = message.text.split(None, 1)[1]
+    tokens = re.split(r"[\s,;\"'\n\r]+", raw_words)
+    added = []
+
+    for t in tokens:
+        w = "".join(c.lower() for c in t if c.isalpha()).strip()
+        if len(w) >= 4:
+            if w not in EVENT_WORDS:
+                EVENT_WORDS.append(w)
+                DB.execute("INSERT OR IGNORE INTO event_words(word) VALUES (?)", (w,))
+                added.append(w)
+
+    DB.commit()
+    await message.reply_text(f"<blockquote>✅ <b>{len(added)}</b> words added to <b>Event Mystery Word Bank</b>!</blockquote>", parse_mode=ParseMode.HTML)
+
+@app.on_message(filters.command("deleventword"))
+async def del_event_word_cmd(_, message: Message):
+    if not message.from_user or not is_authed(message.from_user.id):
+        return await message.reply_text("<blockquote>❌ <b>Authorized users only.</b></blockquote>", parse_mode=ParseMode.HTML)
+
+    if len(message.command) < 2:
+        return await message.reply_text("<blockquote><b>Usage:</b>\n<code>/deleventword supernova</code></blockquote>", parse_mode=ParseMode.HTML)
+
+    target = clean_answer(message.command[1])
+    if target in EVENT_WORDS:
+        EVENT_WORDS.remove(target)
+        DB.execute("DELETE FROM event_words WHERE word=?", (target,))
+        DB.commit()
+        return await message.reply_text(f"<blockquote>🗑️ <b>'{target.upper()}'</b> removed from event words.</blockquote>", parse_mode=ParseMode.HTML)
+    await message.reply_text("<blockquote>❌ <b>Word not found in event bank.</b></blockquote>", parse_mode=ParseMode.HTML)
+
+@app.on_message(filters.command("eventwords"))
+async def view_event_words_cmd(_, message: Message):
+    if not message.from_user or not is_authed(message.from_user.id):
+        return await message.reply_text("<blockquote>❌ <b>Authorized users only.</b></blockquote>", parse_mode=ParseMode.HTML)
+
+    if not EVENT_WORDS:
+        return await message.reply_text("<blockquote><i>Event word bank is currently empty.</i></blockquote>", parse_mode=ParseMode.HTML)
+
+    sample_words = "  •  ".join(f"<code>{w.upper()}</code>" for w in sorted(EVENT_WORDS)[:50])
+    await message.reply_text(
+        f"<blockquote>🌟 <b>𝐄𝐕𝐄𝐍𝐓 𝐌𝐘𝐒𝐓𝐄𝐑𝐘 𝐖𝐎𝐑𝐃 𝐁𝐀𝐍𝐊</b> (Total: {len(EVENT_WORDS)})\n\n"
+        f"{sample_words}\n\n"
+        "➕ <b>Add:</b> <code>/addeventword word1 word2</code>\n"
+        "➖ <b>Del:</b> <code>/deleventword word</code></blockquote>",
+        parse_mode=ParseMode.HTML
+    )
+
+# ============================================================
+# SMART CARD SETTER COMMAND (/setcard)
+# ============================================================
+
+@app.on_message(filters.command("setcard"))
+async def set_card_cmd(_, message: Message):
+    if not message.from_user or not is_authed(message.from_user.id):
+        return await message.reply_text("<blockquote>❌ <b>Sirf Owner aur Auth users shop cards configure kar sakte hain.</b></blockquote>", parse_mode=ParseMode.HTML)
+
+    raw_str = message.text.lower()
+    card_type = None
+
+    if "point" in raw_str:
+        card_type = "point"
+    elif "exp" in raw_str or "level" in raw_str:
+        card_type = "level"
+
+    numbers = [int(n) for n in re.findall(r"\d+", message.text)]
+
+    if not card_type or len(numbers) < 3:
+        return await message.reply_text(
+            "<blockquote><b>Card Configuration Usage:</b>\n\n"
+            "• <code>/setcard point [price] [hours] [min_level]</code>\n"
+            "• <code>/setcard exp [price] [hours] [min_level]</code>\n\n"
+            "<b>Example:</b>\n"
+            "<code>/setcard point 500 4 1</code>\n"
+            "<code>/setcard exp 700 6 2</code></blockquote>",
+            parse_mode=ParseMode.HTML
+        )
+
+    price, hrs, min_lvl = numbers[0], numbers[1], numbers[2]
+    prefix = "card_point" if card_type == "point" else "card_level"
+
+    set_global_config(f"{prefix}_price", price)
+    set_global_config(f"{prefix}_hrs", hrs)
+    set_global_config(f"{prefix}_req_lvl", min_lvl)
+
+    card_title = "Point Multiplication Card (2x Points)" if card_type == "point" else "Level Multiplication Card (2x EXP)"
+    await message.reply_text(
+        f"<blockquote>✅ <b>{card_title} Updated!</b>\n\n"
+        f"💵 <b>Price:</b> <code>{price} Stars/Points</code>\n"
+        f"⏱️ <b>Validity:</b> <code>{hrs} Hours</code>\n"
+        f"🎖️ <b>Min Level Required:</b> <code>Level {min_lvl}</code></blockquote>",
+        parse_mode=ParseMode.HTML
+    )
+
+# ============================================================
+# UNIVERSAL MESSAGE DISPATCHER (WIZARD & ANSWERS)
+# ============================================================
+
+ALL_BOT_COMMANDS = {
+    "start", "help", "jumble", "jumblefight", "fight", "rapido", "jumblebetfight", "betfight",
+    "settings", "setting", "setpoints", "sethint", "setdaily", "setbonus", "daily", "bonus",
+    "private", "public", "addword", "addwords", "delword", "delallword", "delallwords",
+    "clearword", "clearwords", "word", "words", "auth", "unauth", "authlist", "update", "gitpull",
+    "stats", "stat", "mystats", "score", "leaderboard", "top", "rank", "lb", "backup", "dbbackup", "getdb",
+    "shop", "store", "setcard", "setreward", "setevent", "startevent", "stopevent", "addeventword", "deleventword", "eventwords", "setexp", "eventlist", "events", "cancel"
+}
+
+@app.on_message(filters.text)
+async def universal_text_dispatcher(_, message: Message):
+    if not message.from_user or not message.text:
+        return
+
+    uid = message.from_user.id
+    txt = message.text.strip()
+
+    # 1. Wizard Steps (Allowed in Groups & DMs)
+    if uid in EVENT_WIZARD and not txt.startswith("/"):
+        data = EVENT_WIZARD[uid]
+        step = data["step"]
+
+        if step == 1:
+            data["title"] = txt
+            data["step"] = 2
+            return await message.reply_text(
+                "<blockquote>🌟 <b>𝐄𝐕𝐄𝐍𝐓 𝐂𝐑𝐄𝐀𝐓𝐎𝐑 𝐖𝐈𝐙𝐀𝐑𝐃 (Step 2/7)</b>\n\n"
+                "Ab is event ka <b>Unique Word</b> kya hoga? (Jaise: <i>quantum</i>)</blockquote>",
+                parse_mode=ParseMode.HTML
+            )
+        elif step == 2:
+            w = "".join(c.lower() for c in txt if c.isalpha()).strip()
+            if len(w) < 3:
+                return await message.reply_text("<blockquote>❌ <b>Word kam se kam 3 letters ka hona chahiye.</b></blockquote>", parse_mode=ParseMode.HTML)
+            data["word"] = w
+            data["step"] = 3
+            return await message.reply_text(
+                "<blockquote>🌟 <b>𝐄𝐕𝐄𝐍𝐓 𝐂𝐑𝐄𝐀𝐓𝐎𝐑 𝐖𝐈𝐙𝐀𝐑𝐃 (Step 3/7)</b>\n\n"
+                "Is event ke liye koi <b>Hint</b> dena chahte hain?\n"
+                "<i>(Agar hint nahi deni toh sirf <b>0</b> likh kar bhej dein)</i></blockquote>",
+                parse_mode=ParseMode.HTML
+            )
+        elif step == 3:
+            data["hint"] = txt
+            data["step"] = 4
+            return await message.reply_text(
+                "<blockquote>🌟 <b>𝐄𝐕𝐄𝐍𝐓 𝐂𝐑𝐄𝐀𝐓𝐎𝐑 𝐖𝐈𝐙𝐀𝐑𝐃 (Step 4/7)</b>\n\n"
+                "Solve karne par winner ko kitne <b>Stars/Points</b> milne chahiye? (Jaise: <code>500</code>)</blockquote>",
+                parse_mode=ParseMode.HTML
+            )
+        elif step == 4:
+            nums = re.findall(r"\d+", txt)
+            if not nums:
+                return await message.reply_text("<blockquote>❌ <b>Kripya valid number enter karein.</b></blockquote>", parse_mode=ParseMode.HTML)
+            data["stars"] = int(nums[0])
+            data["step"] = 5
+            return await message.reply_text(
+                "<blockquote>🌟 <b>𝐄𝐕𝐄𝐍𝐓 𝐂𝐑𝐄𝐀𝐓𝐎𝐑 𝐖𝐈𝐙𝐀𝐑𝐃 (Step 5/7)</b>\n\n"
+                "Solve karne par winner ko kitna <b>EXP</b> milna chahiye? (Jaise: <code>1000</code>)</blockquote>",
+                parse_mode=ParseMode.HTML
+            )
+        elif step == 5:
+            nums = re.findall(r"\d+", txt)
+            if not nums:
+                return await message.reply_text("<blockquote>❌ <b>Kripya valid number enter karein.</b></blockquote>", parse_mode=ParseMode.HTML)
+            data["exp"] = int(nums[0])
+            data["step"] = 6
+            return await message.reply_text(
+                "<blockquote>🌟 <b>𝐄𝐕𝐄𝐍𝐓 𝐂𝐑𝐄𝐀𝐓𝐎𝐑 𝐖𝐈𝐙𝐀𝐑𝐃 (Step 6/7)</b>\n\n"
+                "Yeh event har kitne <b>Hours (Ghante)</b> baad repeat hona chahiye? (Jaise: <code>4</code>)</blockquote>",
+                parse_mode=ParseMode.HTML
+            )
+        elif step == 6:
+            nums = re.findall(r"\d+", txt)
+            if not nums:
+                return await message.reply_text("<blockquote>❌ <b>Kripya valid number enter karein.</b></blockquote>", parse_mode=ParseMode.HTML)
+            data["interval"] = int(nums[0])
+            data["step"] = 7
+
+            kb = InlineKeyboardMarkup([
+                [
+                    InlineKeyboardButton("👥 Groups Only", callback_data="ev_target_group"),
+                    InlineKeyboardButton("💬 DMs Only", callback_data="ev_target_dm")
+                ],
+                [
+                    InlineKeyboardButton("🌍 Both Groups & DMs", callback_data="ev_target_both")
+                ]
+            ])
+
+            return await message.reply_text(
+                "<blockquote>🌟 <b>𝐄𝐕𝐄𝐍𝐓 𝐂𝐑𝐄𝐀𝐓𝐎𝐑 𝐖𝐈𝐙𝐀𝐑𝐃 (Step 7/7)</b>\n\n"
+                "Yeh event kahan run hona chahiye? Neeche diye gaye button par click karein:</blockquote>",
+                reply_markup=kb,
+                parse_mode=ParseMode.HTML
+            )
+
+    # Ignore command texts from game solvers
+    if txt.startswith("/") or txt.startswith("!") or txt.startswith("."):
+        cmd_candidate = txt[1:].split()[0].split("@")[0].lower()
+        if cmd_candidate in ALL_BOT_COMMANDS:
+            return
+
+    # Answer handler in groups
+    if is_group(message):
+        await group_answer_handler(_, message)
+
+# ============================================================
+# AUTO-RESUME GAMES ON BOT STARTUP (SAFE RESUME)
+# ============================================================
+
+async def resume_all_active_games():
+    await asyncio.sleep(3)
+    rows = DB.execute("SELECT chat_id, default_diff FROM settings WHERE is_active = 1 AND chat_id != 0").fetchall()
+    
+    for row in rows:
+        c_id = row["chat_id"]
+        diff = row["default_diff"] or "medium"
+        try:
+            DB.execute("DELETE FROM games WHERE chat_id=?", (c_id,))
+            DB.commit()
+            
+            await start_game(c_id, diff, c_id)
+            await asyncio.sleep(0.8)
+        except (ChannelInvalid, ChannelPrivate, PeerIdInvalid, UserIsBlocked):
+            DB.execute("UPDATE settings SET is_active=0 WHERE chat_id=?", (c_id,))
+            DB.commit()
+        except Exception as e:
+            print(f"Resume warning for chat {c_id}: {e}")
 
 # ============================================================
 # RUN BOT
