@@ -13,6 +13,9 @@ def init_db():
         name TEXT,
         points INTEGER DEFAULT 0,
         solved INTEGER DEFAULT 0,
+        easy_solved INTEGER DEFAULT 0,
+        medium_solved INTEGER DEFAULT 0,
+        hard_solved INTEGER DEFAULT 0,
         best_streak INTEGER DEFAULT 0,
         streak INTEGER DEFAULT 0,
         fight_wins INTEGER DEFAULT 0,
@@ -20,7 +23,8 @@ def init_db():
         bet_wins INTEGER DEFAULT 0,
         bet_losses INTEGER DEFAULT 0,
         is_private INTEGER DEFAULT 0,
-        last_daily REAL DEFAULT 0
+        last_daily REAL DEFAULT 0,
+        daily_claims INTEGER DEFAULT 0
     );
 
     CREATE TABLE IF NOT EXISTS auth_users (
@@ -100,7 +104,17 @@ def init_db():
     """)
     DB.commit()
 
-    # Default Bot Config
+    # Dynamic Column Migration for existing databases
+    user_cols = [c[1] for c in DB.execute("PRAGMA table_info(users)").fetchall()]
+    if "easy_solved" not in user_cols:
+        DB.execute("ALTER TABLE users ADD COLUMN easy_solved INTEGER DEFAULT 0")
+    if "medium_solved" not in user_cols:
+        DB.execute("ALTER TABLE users ADD COLUMN medium_solved INTEGER DEFAULT 0")
+    if "hard_solved" not in user_cols:
+        DB.execute("ALTER TABLE users ADD COLUMN hard_solved INTEGER DEFAULT 0")
+    if "daily_claims" not in user_cols:
+        DB.execute("ALTER TABLE users ADD COLUMN daily_claims INTEGER DEFAULT 0")
+
     defaults = {
         "points_easy": 10,
         "points_medium": 20,
@@ -109,7 +123,8 @@ def init_db():
         "hints_medium": 3,
         "hints_hard": 3,
         "daily_points": 50,
-        "bonus_points": 100
+        "bonus_points": 100,
+        "logging_enabled": 1
     }
     for k, v in defaults.items():
         DB.execute("INSERT OR IGNORE INTO bot_config (key, value) VALUES (?, ?)", (k, v))
