@@ -1,7 +1,7 @@
 import asyncio
 import time
 from database import DB, get_settings, get_global_config, ensure_user, get_user
-from helpers import clean_answer, get_mention, safe_delete_and_unpin, delete_after, LOCK
+from helpers import clean_answer, get_mention, safe_delete_and_unpin, delete_after, LOCK, send_log_event
 from plugins.fight import ACTIVE_FIGHTS, fight_next
 from plugins.game_core import start_game
 from pyrogram import Client, filters
@@ -12,7 +12,8 @@ ALL_BOT_COMMANDS = {
     "start", "help", "jumble", "jumblefight", "fight", "jumblebetfight", "betfight",
     "settings", "setting", "setpoints", "sethint", "setdaily", "setbonus", "daily", "bonus",
     "private", "public", "addword", "addwords", "delword", "delallword", "word", "words",
-    "auth", "unauth", "authlist", "update", "gitpull", "stats", "score", "leaderboard", "lb", "backup"
+    "auth", "unauth", "authlist", "update", "gitpull", "stats", "score", "leaderboard", "lb",
+    "backup", "log", "calculate"
 }
 
 @Client.on_message(filters.text & filters.group, group=1)
@@ -32,7 +33,7 @@ async def group_answer_handler(client: Client, message: Message):
     if not cleaned_input:
         return
 
-    # Fight Answer Check
+    # 1. Fight Answer Check
     if chat_id in ACTIVE_FIGHTS:
         async with LOCK:
             game = ACTIVE_FIGHTS.get(chat_id)
@@ -49,7 +50,7 @@ async def group_answer_handler(client: Client, message: Message):
                 return
         return
 
-    # Normal Puzzle Check
+    # 2. Normal Puzzle Check
     game = DB.execute("SELECT * FROM games WHERE chat_id=? AND solved=0", (chat_id,)).fetchone()
     if not game or time.time() > game["expires"]:
         return
@@ -63,13 +64,29 @@ async def group_answer_handler(client: Client, message: Message):
         ensure_user(message.from_user)
         u = get_user(user_id)
         settings = get_settings(chat_id)
-        pts_reward = get_global_config(f"points_{game['difficulty']}", 10)
+        diff = game["difficulty"].lower()
+        pts_reward = get_global_config(f"points_{diff}", 10)
         new_streak = u["streak"] + 1
         best = max(new_streak, u["best_streak"])
 
-        DB.execute("UPDATE users SET points=points+?, solved=solved+1, streak=?, best_streak=? WHERE user_id=?", (pts_reward, new_streak, best, user_id))
+        diff_column = "medium_solved"
+        if diff == "easy":
+            diff_column = "easy_solved"
+        elif diff == "hard":
+            diff_column = "hard_solved"
+
+        DB.execute(f"""
+            UPDATE users
+            SET points = points + ?, solved = solved + 1, {diff_column} = {diff_column} + 1,
+                streak = ?, best_streak = ?
+            WHERE user_id = ?
+        """, (pts_reward, new_streak, best, user_id))
+
         DB.execute("INSERT INTO score_history (user_id, chat_id, points, timestamp) VALUES (?, ?, ?, ?)", (user_id, chat_id, pts_reward, time.time()))
         DB.commit()
+
+        # Send Real-Time Log to Channel
+        asyncio.create_task(send_log_event(client, message.from_user, message.chat, game["word"], txt, pts_reward, diff))
 
         if settings["auto_delete"] and game["message_id"]:
             await safe_delete_and_unpin(client, chat_id, game["message_id"])
