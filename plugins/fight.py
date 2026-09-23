@@ -1,22 +1,33 @@
 import asyncio
+import os
+import random
 import time
 from collections import defaultdict
-import random
 
 from database import DB, get_settings, ensure_user, get_user
 from helpers import LOCK, safe_delete_and_unpin, delete_after, get_mention, is_group, is_admin_or_owner
 from image_gen import make_puzzle_image
 from plugins.game_core import ACTIVE_FIGHTS, start_game
-from pyrogram import Client, filters
-from pyrogram.enums import ParseMode
-from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton, Message
+from pyrogram import Client, filters, enums, types
+from pyrogram.types import Message
+from utils.rich import send_jumble_rich, html_to_rich_blocks
 from word_bank import WORDS, jumble_word
 
 FIGHT_LOBBY = {}
 REBET_LOBBY = {}
 
-def fight_keyboard():
-    return InlineKeyboardMarkup([[InlineKeyboardButton("💡 𝐇ɪɴᴛ", callback_data="fight_hint")]])
+
+def fight_rich_buttons():
+    return [
+        [
+            types.RichMessageButton(
+                text="💡 𝐇ɪɴᴛ",
+                style=enums.ButtonStyle.PRIMARY,
+                callback_data="fight_hint",
+            )
+        ]
+    ]
+
 
 async def fight_timeout_task(client: Client, chat_id: int, round_num: int, timer_duration: int):
     await asyncio.sleep(timer_duration)
@@ -29,14 +40,14 @@ async def fight_timeout_task(client: Client, chat_id: int, round_num: int, timer
             if s["auto_delete"] and game.get("msg_id"):
                 await safe_delete_and_unpin(client, chat_id, game["msg_id"])
             try:
-                t_msg = await client.send_message(
-                    chat_id,
-                    f"<blockquote>⏰ <b>𝐑ᴏᴜɴᴅ {round_num} 𝐓ɪᴍᴇᴏᴜᴛ!</b>\n"
-                    f"❌ <b>Answer:</b> <code>{word.upper()}</code>\n"
-                    f"🔄 <i>Next round starting...</i></blockquote>",
-                    parse_mode=ParseMode.HTML
+                caption = (
+                    f"<blockquote><emoji id=5895705279416241926>⏰</emoji> <u><b>𝐑𝐎𝐔𝐍𝐃 {round_num} 𝐓𝐈𝐌𝐄𝐎𝐔𝐓!</b></u></blockquote>\n\n"
+                    f"<blockquote expandable>"
+                    f"❌ <b>Answer :</b> <code>{word.upper()}</code>\n"
+                    f"<emoji id=5974235702701853774>🔄</emoji> <i>Next round starting immediately...</i></blockquote>"
                 )
-                if s["auto_delete"]:
+                t_msg = await send_jumble_rich(client, chat_id, caption)
+                if s["auto_delete"] and t_msg:
                     asyncio.create_task(delete_after(t_msg, 4))
             except Exception:
                 pass
@@ -45,6 +56,7 @@ async def fight_timeout_task(client: Client, chat_id: int, round_num: int, timer
     if should_advance:
         await asyncio.sleep(2.5)
         asyncio.create_task(fight_next(client, chat_id))
+
 
 async def fight_next(client: Client, chat_id: int):
     game = ACTIVE_FIGHTS.get(chat_id)
@@ -72,22 +84,34 @@ async def fight_next(client: Client, chat_id: int):
     game["round_hints"] = defaultdict(lambda: {"count": 0, "indices": []})
 
     fight_tag = "BET FIGHT" if game.get("is_bet") else "FIGHT"
-    image = make_puzzle_image(jumbled, f"{fight_tag} {diff.upper()}", game["round"])
-    title_header = "💰 <b>𝐉𝐔𝐌𝐁𝐋𝐄 𝐁𝐄𝐓 𝐅𝐈𝐆𝐇𝐓" if game.get("is_bet") else "⚔️ <b>𝐉𝐔𝐌𝐁𝐋𝐄 𝐅𝐈𝐆𝐇𝐓"
+    image_path = make_puzzle_image(jumbled, f"{fight_tag} {diff.upper()}", game["round"])
+
+    header_icon = "💰" if game.get("is_bet") else "⚔️"
+    header_name = "𝐉𝐔𝐌𝐁𝐋𝐄 𝐁𝐄𝐓 𝐅𝐈𝐆𝐇𝐓" if game.get("is_bet") else "𝐉𝐔𝐌𝐁𝐋𝐄 𝐅𝐈𝐆𝐇𝐓"
     extra_info = f"\n💵 <b>𝐁ᴇᴛ:</b> <code>{game.get('bet_amount')} pts</code>" if game.get("is_bet") else ""
 
+    caption = (
+        f"<blockquote><emoji id=5895705279416241926>{header_icon}</emoji> <u><b>{header_name} — 𝐑𝐎𝐔𝐍𝐃 {game['round']}/10</b></u></blockquote>\n\n"
+        f"<blockquote expandable>"
+        f"<emoji id=6066395745139824604>🎯</emoji> <b>𝐃ɪғғɪᴄᴜʟᴛʏ:</b> <code>{diff.title()}</code>\n"
+        f"<emoji id=5974235702701853774>⏱️</emoji> <b>𝐓ɪᴍᴇ:</b> <code>{game['timer']}s</code>{extra_info}\n"
+        f"<emoji id=5409132617750555920>👥</emoji> <b>Versus:</b> {game['mentions'][game['players'][0]]} 🆚 {game['mentions'][game['players'][1]]}</blockquote>"
+    )
+
+    blocks = []
+    if image_path and os.path.isfile(str(image_path)):
+        try:
+            blocks.append(types.InputRichBlockPhoto(photo=types.InputMediaPhoto(str(image_path))))
+        except Exception:
+            pass
+
+    blocks.extend(html_to_rich_blocks(caption))
+    blocks.append(types.InputRichBlockButtons(buttons=fight_rich_buttons()[0]))
+
     try:
-        sent = await client.send_photo(
-            chat_id,
-            photo=image,
-            caption=(
-                f"<blockquote>{title_header} — 𝐑𝐎𝐔𝐍𝐃 {game['round']}/10</b>\n\n"
-                f"🎯 <b>𝐃ɪғғɪᴄᴜʟᴛʏ:</b> <code>{diff.title()}</code>\n"
-                f"⏱️ <b>𝐓ɪᴍᴇ:</b> <code>{game['timer']}s</code>{extra_info}\n"
-                f"👥 <b>Players:</b> {game['mentions'][game['players'][0]]} 🆚 {game['mentions'][game['players'][1]]}</blockquote>"
-            ),
-            reply_markup=fight_keyboard(),
-            parse_mode=ParseMode.HTML
+        sent = await client.send_rich_message(
+            chat_id=chat_id,
+            rich_message=types.InputRichMessage(blocks=blocks)
         )
         game["msg_id"] = sent.id
         try:
@@ -98,6 +122,7 @@ async def fight_next(client: Client, chat_id: int):
         print(f"Fight error: {e}")
 
     game["task"] = asyncio.create_task(fight_timeout_task(client, chat_id, game["round"], game["timer"]))
+
 
 async def finish_fight(client: Client, chat_id: int):
     game = ACTIVE_FIGHTS.pop(chat_id, None)
@@ -124,29 +149,35 @@ async def finish_fight(client: Client, chat_id: int):
 
     winner = p1 if s1 > s2 else (p2 if s2 > s1 else None)
     loser = p2 if winner == p1 else (p1 if winner == p2 else None)
-    w_score = max(s1, s2)
-    l_score = min(s1, s2)
     m1, m2 = game["mentions"][p1], game["mentions"][p2]
-    end_kb = None
+    end_buttons = None
 
     if not is_bet:
         if winner:
             DB.execute("UPDATE users SET fight_wins=fight_wins+1 WHERE user_id=?", (winner,))
             DB.execute("UPDATE users SET fight_losses=fight_losses+1 WHERE user_id=?", (loser,))
             DB.commit()
-        result = f"<blockquote>🏁 <b>𝐉𝐔𝐌𝐁𝐋𝐄 𝐅𝐈𝐆𝐇𝐓 𝐎𝐕𝐄𝐑!</b>\n\n👤 {m1} — <b>{s1} pts</b>\n👤 {m2} — <b>{s2} pts</b>\n\n"
-        result += f"🏆 <b>Winner:</b> {game['mentions'][winner]} 🎉</blockquote>" if winner else "🤝 <b>Match Draw!</b></blockquote>"
+
+        win_text = f"🏆 <b>Winner:</b> {game['mentions'][winner]} 🎉" if winner else "🤝 <b>Match Draw!</b>"
+        result_caption = (
+            "<blockquote><emoji id=5895705279416241926>🏁</emoji> <u><b>𝐉𝐔𝐌𝐁𝐋𝐄 𝐅𝐈𝐆𝐇𝐓 𝐎𝐕𝐄𝐑!</b></u></blockquote>\n\n"
+            "<blockquote expandable>"
+            f"👤 {m1} — <b>{s1} pts</b>\n"
+            f"👤 {m2} — <b>{s2} pts</b>\n\n"
+            f"{win_text}</blockquote>"
+        )
     else:
         if winner:
             if is_rebet:
                 total_pot = (bet_amt * 2) + 100
-                DB.execute("UPDATE users SET points=points+?, bet_wins=bet_wins+1 WHERE user_id=?", (total_pot, winner))
+                DB.execute("UPDATE users SET points=points+?, stars=stars+?, bet_wins=bet_wins+1 WHERE user_id=?", (total_pot, total_pot, winner))
                 DB.execute("UPDATE users SET bet_losses=bet_losses+1 WHERE user_id=?", (loser,))
                 DB.execute("INSERT INTO score_history (user_id, chat_id, points, timestamp) VALUES (?, ?, ?, ?)", (winner, chat_id, total_pot, now))
                 DB.commit()
-                result = (
-                    f"<blockquote>💰 <b>COMEBACK RE-BET OVER!</b>\n\n"
-                    f"🏆 <b>Winner:</b> {game['mentions'][winner]} (+{total_pot} pts)\n"
+                result_caption = (
+                    "<blockquote><emoji id=5895705279416241926>💰</emoji> <u><b>COMEBACK RE-BET OVER!</b></u></blockquote>\n\n"
+                    "<blockquote expandable>"
+                    f"🏆 <b>Winner:</b> {game['mentions'][winner]} (+{total_pot} pts/stars)\n"
                     f"💀 <b>Loser:</b> {game['mentions'][loser]}</blockquote>"
                 )
             else:
@@ -155,8 +186,8 @@ async def finish_fight(client: Client, chat_id: int):
                 loser_cashback = total_pot - win_reward
                 rebet_stake = int(bet_amt * 0.25)
 
-                DB.execute("UPDATE users SET points=points+?, bet_wins=bet_wins+1 WHERE user_id=?", (win_reward, winner))
-                DB.execute("UPDATE users SET points=points+?, bet_losses=bet_losses+1 WHERE user_id=?", (loser_cashback, loser))
+                DB.execute("UPDATE users SET points=points+?, stars=stars+?, bet_wins=bet_wins+1 WHERE user_id=?", (win_reward, win_reward, winner))
+                DB.execute("UPDATE users SET points=points+?, stars=stars+?, bet_losses=bet_losses+1 WHERE user_id=?", (loser_cashback, loser_cashback, loser))
                 DB.execute("INSERT INTO score_history (user_id, chat_id, points, timestamp) VALUES (?, ?, ?, ?)", (winner, chat_id, win_reward, now))
                 DB.execute("INSERT INTO score_history (user_id, chat_id, points, timestamp) VALUES (?, ?, ?, ?)", (loser, chat_id, loser_cashback, now))
                 DB.commit()
@@ -170,22 +201,32 @@ async def finish_fight(client: Client, chat_id: int):
                     "winner_mention": game['mentions'][winner],
                     "loser_mention": game['mentions'][loser]
                 }
-                end_kb = InlineKeyboardMarkup([[InlineKeyboardButton(f"🔁 25% Re-Bet ({rebet_stake} pts) + 100 Bonus", callback_data="rebet_challenge")]])
-                result = (
-                    f"<blockquote>💰 <b>𝐉𝐔𝐌𝐁𝐋𝐄 𝐁𝐄𝐓 𝐅𝐈𝐆𝐇𝐓 𝐎𝐕𝐄𝐑!</b>\n\n"
+                end_buttons = [
+                    [
+                        types.RichMessageButton(
+                            text=f"🔁 25% Re-Bet ({rebet_stake} pts) + 100 Bonus",
+                            style=enums.ButtonStyle.SUCCESS,
+                            callback_data="rebet_challenge",
+                        )
+                    ]
+                ]
+                result_caption = (
+                    "<blockquote><emoji id=5895705279416241926>💰</emoji> <u><b>𝐉𝐔𝐌𝐁𝐋𝐄 𝐁𝐄𝐓 𝐅𝐈𝐆𝐇𝐓 𝐎𝐕𝐄𝐑!</b></u></blockquote>\n\n"
+                    "<blockquote expandable>"
                     f"🏆 <b>Winner (75%):</b> {game['mentions'][winner]} (+{win_reward} pts)\n"
                     f"🛡️ <b>Cashback (25%):</b> {game['mentions'][loser]} (+{loser_cashback} pts)</blockquote>"
                 )
         else:
-            DB.execute("UPDATE users SET points=points+? WHERE user_id=?", (bet_amt, p1))
-            DB.execute("UPDATE users SET points=points+? WHERE user_id=?", (bet_amt, p2))
+            DB.execute("UPDATE users SET points=points+?, stars=stars+? WHERE user_id=?", (bet_amt, bet_amt, p1))
+            DB.execute("UPDATE users SET points=points+?, stars=stars+? WHERE user_id=?", (bet_amt, bet_amt, p2))
             DB.commit()
-            result = f"<blockquote>🤝 <b>BET DRAW! Refunded {bet_amt} points each.</b></blockquote>"
+            result_caption = f"<blockquote><emoji id=5895705279416241926>🤝</emoji> <b>BET DRAW! Refunded {bet_amt} points each.</b></blockquote>"
 
-    await client.send_message(chat_id, result, reply_markup=end_kb, parse_mode=ParseMode.HTML)
+    await send_jumble_rich(client, chat_id, result_caption, end_buttons)
     await asyncio.sleep(3)
     if s["is_active"]:
         asyncio.create_task(start_game(client, chat_id, s["default_diff"] or "medium", chat_id))
+
 
 @Client.on_message(filters.command(["jumblefight", "fight"]))
 async def jumble_fight_cmd(client: Client, message: Message):
@@ -227,23 +268,65 @@ async def jumble_fight_cmd(client: Client, message: Message):
         "bet_amount": 0
     }
 
-    kb = InlineKeyboardMarkup([
+    caption = (
+        "<blockquote><emoji id=5895705279416241926>⚔️</emoji> <u><b>JUMBLE FIGHT INVITATION</b></u></blockquote>\n\n"
+        "<blockquote expandable>"
+        f"<emoji id=5974235702701853774>👤</emoji> <b>Challenger :</b> {m1}\n"
+        f"<emoji id=6066395745139824604>🎯</emoji> <b>Opponent :</b> {m2}\n\n"
+        "Configure difficulty & timer below, then accept to duel!</blockquote>"
+    )
+
+    buttons = [
         [
-            InlineKeyboardButton("🟢 Easy", callback_data="f_diff_easy"),
-            InlineKeyboardButton("🟡 Medium", callback_data="f_diff_medium"),
-            InlineKeyboardButton("🔴 Hard", callback_data="f_diff_hard")
+            types.RichMessageButton(
+                text="🟢 Easy",
+                style=enums.ButtonStyle.SUCCESS,
+                callback_data="f_diff_easy",
+            ),
+            types.RichMessageButton(
+                text="🟡 Medium",
+                style=enums.ButtonStyle.PRIMARY,
+                callback_data="f_diff_medium",
+            ),
+            types.RichMessageButton(
+                text="🔴 Hard",
+                style=enums.ButtonStyle.DANGER,
+                callback_data="f_diff_hard",
+            ),
         ],
         [
-            InlineKeyboardButton("⏱️ 30s", callback_data="f_time_30"),
-            InlineKeyboardButton("⏱️ 45s", callback_data="f_time_45"),
-            InlineKeyboardButton("⏱️ 60s", callback_data="f_time_60")
+            types.RichMessageButton(
+                text="⏱️ 30s",
+                style=enums.ButtonStyle.DEFAULT,
+                callback_data="f_time_30",
+            ),
+            types.RichMessageButton(
+                text="⏱️ 45s",
+                style=enums.ButtonStyle.DEFAULT,
+                callback_data="f_time_45",
+            ),
+            types.RichMessageButton(
+                text="⏱️ 60s",
+                style=enums.ButtonStyle.DEFAULT,
+                callback_data="f_time_60",
+            ),
         ],
         [
-            InlineKeyboardButton("✅ Accept Challenge", callback_data="f_accept"),
-            InlineKeyboardButton("❌ Decline", callback_data="f_decline")
-        ]
-    ])
-    await message.reply_text(f"<blockquote>⚔️ {m1} challenged {m2}!</blockquote>", reply_markup=kb, parse_mode=ParseMode.HTML)
+            types.RichMessageButton(
+                text="✅ Accept Challenge",
+                style=enums.ButtonStyle.SUCCESS,
+                callback_data="f_accept",
+            ),
+            types.RichMessageButton(
+                text="❌ Decline",
+                style=enums.ButtonStyle.DANGER,
+                callback_data="f_decline",
+            ),
+        ],
+    ]
+
+    await send_jumble_rich(client, message.chat.id, caption, buttons)
+
 
 @Client.on_message(filters.command(["jumblebetfight", "betfight"]))
 async def bet_fight_cmd(client: Client, message: Message):
@@ -274,8 +357,11 @@ async def bet_fight_cmd(client: Client, message: Message):
     ensure_user(target_user)
     u1, u2 = get_user(message.from_user.id), get_user(target_user.id)
 
-    if u1["points"] < amount or u2["points"] < amount:
-        return await message.reply_text("Dono players ke paas bet ke barabar points hone chahiye.")
+    points1 = u1["stars"] if "stars" in u1.keys() and u1["stars"] > 0 else u1["points"]
+    points2 = u2["stars"] if "stars" in u2.keys() and u2["stars"] > 0 else u2["points"]
+
+    if points1 < amount or points2 < amount:
+        return await message.reply_text("Dono players ke paas bet ke barabar points/stars hone chahiye.")
 
     m1, m2 = get_mention(message.from_user), get_mention(target_user)
     FIGHT_LOBBY[message.chat.id] = {
@@ -292,10 +378,28 @@ async def bet_fight_cmd(client: Client, message: Message):
         "is_rebet": False
     }
 
-    kb = InlineKeyboardMarkup([
+    caption = (
+        "<blockquote><emoji id=5895705279416241926>💰</emoji> <u><b>HIGH STAKES BET FIGHT</b></u></blockquote>\n\n"
+        "<blockquote expandable>"
+        f"<emoji id=5974235702701853774>👤</emoji> <b>Challenger :</b> {m1}\n"
+        f"<emoji id=6066395745139824604>🎯</emoji> <b>Opponent :</b> {m2}\n"
+        f"💵 <b>Bet Amount :</b> <code>{amount} Points / Stars</code>\n"
+        f"🎯 <b>Difficulty :</b> <code>{diff.title()}</code></blockquote>"
+    )
+
+    buttons = [
         [
-            InlineKeyboardButton("✅ Accept Bet", callback_data="f_accept"),
-            InlineKeyboardButton("❌ Decline", callback_data="f_decline")
+            types.RichMessageButton(
+                text="✅ Accept Bet",
+                style=enums.ButtonStyle.SUCCESS,
+                callback_data="f_accept",
+            ),
+            types.RichMessageButton(
+                text="❌ Decline",
+                style=enums.ButtonStyle.DANGER,
+                callback_data="f_decline",
+            ),
         ]
-    ])
-    await message.reply_text(f"<blockquote>💰 {m1} challenged {m2} for <b>{amount} points</b>!</blockquote>", reply_markup=kb, parse_mode=ParseMode.HTML)
+    ]
+
+    await send_jumble_rich(client, message.chat.id, caption, buttons)
