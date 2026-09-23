@@ -5,6 +5,7 @@ from config import DB_NAME
 DB = sqlite3.connect(DB_NAME, check_same_thread=False)
 DB.row_factory = sqlite3.Row
 
+
 def init_db():
     DB.executescript("""
     CREATE TABLE IF NOT EXISTS users (
@@ -12,6 +13,8 @@ def init_db():
         username TEXT,
         name TEXT,
         points INTEGER DEFAULT 0,
+        stars INTEGER DEFAULT 0,
+        exp INTEGER DEFAULT 0,
         solved INTEGER DEFAULT 0,
         easy_solved INTEGER DEFAULT 0,
         medium_solved INTEGER DEFAULT 0,
@@ -24,7 +27,9 @@ def init_db():
         bet_losses INTEGER DEFAULT 0,
         is_private INTEGER DEFAULT 0,
         last_daily REAL DEFAULT 0,
-        daily_claims INTEGER DEFAULT 0
+        daily_claims INTEGER DEFAULT 0,
+        point_boost_until REAL DEFAULT 0,
+        exp_boost_until REAL DEFAULT 0
     );
 
     CREATE TABLE IF NOT EXISTS auth_users (
@@ -106,14 +111,26 @@ def init_db():
 
     # Dynamic Column Migration for existing databases
     user_cols = [c[1] for c in DB.execute("PRAGMA table_info(users)").fetchall()]
-    if "easy_solved" not in user_cols:
-        DB.execute("ALTER TABLE users ADD COLUMN easy_solved INTEGER DEFAULT 0")
-    if "medium_solved" not in user_cols:
-        DB.execute("ALTER TABLE users ADD COLUMN medium_solved INTEGER DEFAULT 0")
-    if "hard_solved" not in user_cols:
-        DB.execute("ALTER TABLE users ADD COLUMN hard_solved INTEGER DEFAULT 0")
-    if "daily_claims" not in user_cols:
-        DB.execute("ALTER TABLE users ADD COLUMN daily_claims INTEGER DEFAULT 0")
+    migrations = {
+        "stars": "INTEGER DEFAULT 0",
+        "exp": "INTEGER DEFAULT 0",
+        "point_boost_until": "REAL DEFAULT 0",
+        "exp_boost_until": "REAL DEFAULT 0",
+        "easy_solved": "INTEGER DEFAULT 0",
+        "medium_solved": "INTEGER DEFAULT 0",
+        "hard_solved": "INTEGER DEFAULT 0",
+        "daily_claims": "INTEGER DEFAULT 0",
+        "last_daily": "REAL DEFAULT 0",
+    }
+    for col, col_type in migrations.items():
+        if col not in user_cols:
+            try:
+                DB.execute(f"ALTER TABLE users ADD COLUMN {col} {col_type}")
+            except Exception:
+                pass
+
+    # Purane points ko stars ke sath synchronize karein agar stars 0 hon
+    DB.execute("UPDATE users SET stars = points WHERE stars = 0 AND points > 0")
 
     defaults = {
         "points_easy": 10,
@@ -124,17 +141,20 @@ def init_db():
         "hints_hard": 3,
         "daily_points": 50,
         "bonus_points": 100,
-        "logging_enabled": 1
+        "logging_enabled": 1,
     }
     for k, v in defaults.items():
         DB.execute("INSERT OR IGNORE INTO bot_config (key, value) VALUES (?, ?)", (k, v))
     DB.commit()
 
+
 init_db()
+
 
 def get_global_config(key, default_val):
     row = DB.execute("SELECT value FROM bot_config WHERE key=?", (key,)).fetchone()
     return row["value"] if row else default_val
+
 
 def set_global_config(key, val):
     DB.execute("""
@@ -143,20 +163,27 @@ def set_global_config(key, val):
     """, (key, val))
     DB.commit()
 
-def ensure_user(user):
+
+def ensure_user(user, first_name=None):
     if not user:
         return
+    u_id = user.id if hasattr(user, "id") else int(user)
+    u_name = user.username if hasattr(user, "username") else ""
+    f_name = user.first_name if hasattr(user, "first_name") else (first_name or "Player")
+
     DB.execute("""
         INSERT INTO users(user_id, username, name)
         VALUES (?, ?, ?)
         ON CONFLICT(user_id) DO UPDATE SET
             username=excluded.username,
             name=excluded.name
-    """, (user.id, user.username or "", user.first_name or "Player"))
+    """, (u_id, u_name or "", f_name))
     DB.commit()
+
 
 def get_user(user_id):
     return DB.execute("SELECT * FROM users WHERE user_id=?", (user_id,)).fetchone()
+
 
 def get_settings(chat_id):
     row = DB.execute("SELECT * FROM settings WHERE chat_id=?", (chat_id,)).fetchone()
@@ -169,3 +196,23 @@ def get_settings(chat_id):
         DB.commit()
         row = DB.execute("SELECT * FROM settings WHERE chat_id=?", (chat_id,)).fetchone()
     return row
+
+
+def set_settings(chat_id, key, value):
+    valid_cols = ["easy", "medium", "hard", "default_diff", "is_active", "auto_delete"]
+    if key in valid_cols:
+        DB.execute(f"UPDATE settings SET {key}=? WHERE chat_id=?", (value, chat_id))
+        DB.commit()
+
+
+def get_top_players(limit=5):
+    return DB.execute(
+        "SELECT user_id, name, points, stars, exp FROM users ORDER BY stars DESC, points DESC LIMIT ?",
+        (limit,),
+    ).fetchall()
+
+
+async def is_admin(chat_id, user_id):
+    # Auth user check
+    row = DB.execute("SELECT * FROM auth_users WHERE user_id=?", (user_id,)).fetchone()
+    return bool(row)
