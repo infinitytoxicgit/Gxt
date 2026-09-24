@@ -5,9 +5,16 @@ import time
 from collections import defaultdict
 
 from database import DB, get_settings, ensure_user, get_user, get_global_config
-from helpers import LOCK, safe_delete_and_unpin, delete_after, get_mention, is_group
+from helpers import (
+    LOCK, 
+    safe_delete_and_unpin, 
+    delete_after, 
+    get_mention, 
+    is_group, 
+    ACTIVE_FIGHTS
+)
 from image_gen import make_puzzle_image
-from plugins.game_core import ACTIVE_FIGHTS, start_game
+from plugins.game_core import start_game
 from pyrogram import Client, filters, enums, types
 from pyrogram.types import Message, CallbackQuery
 from utils.rich import send_jumble_rich, edit_jumble_rich
@@ -95,7 +102,6 @@ def build_fight_lobby_card(lobby_data):
 
 async def fight_timeout_task(client: Client, chat_id: int, current_round: int, round_token: int, timer_duration: int):
     try:
-        # Exact utna wait karega jitna timer set hai (jaise 30s, 45s, 60s)
         await asyncio.sleep(timer_duration)
     except asyncio.CancelledError:
         return
@@ -104,10 +110,12 @@ async def fight_timeout_task(client: Client, chat_id: int, current_round: int, r
         game = ACTIVE_FIGHTS.get(chat_id)
         if not game:
             return
-        if game.get("round") != current_round or game.get("round_token") != round_token or game.get("is_solved"):
+        if game.get("round") != current_round or game.get("round_token") != round_token or game.get("is_solved") or game.get("is_advancing"):
             return
 
         game["is_solved"] = True
+        game["is_advancing"] = True
+
         word = game["word"]
         s = dict(get_settings(chat_id)) if get_settings(chat_id) else {}
         if s.get("auto_delete") and game.get("msg_id"):
@@ -117,15 +125,15 @@ async def fight_timeout_task(client: Client, chat_id: int, current_round: int, r
             caption = (
                 f"<blockquote>⏰ <u><b>ROUND {current_round} TIMEOUT!</b></u></blockquote>\n\n"
                 f"<blockquote>❌ <b>Nobody solved it! Answer was :</b> <code>{word.upper()}</code>\n"
-                f"🔄 <i>Next round starting in 2 seconds...</i></blockquote>"
+                f"🔄 <i>Next round starting in 3 seconds...</i></blockquote>"
             )
             t_msg = await send_jumble_rich(client, chat_id, caption)
             if s.get("auto_delete") and t_msg:
-                asyncio.create_task(delete_after(t_msg, 3))
+                asyncio.create_task(delete_after(t_msg, 4))
         except Exception:
             pass
 
-    await asyncio.sleep(2)
+    await asyncio.sleep(3)
     await fight_next(client, chat_id)
 
 
@@ -152,6 +160,7 @@ async def fight_next(client: Client, chat_id: int):
         game["round_token"] = token
         game["word"] = word
         game["is_solved"] = False
+        game["is_advancing"] = False
         game["expires"] = time.time() + game["timer"]
         game["round_hints"] = defaultdict(lambda: {"count": 0, "indices": []})
 
@@ -472,18 +481,17 @@ async def fight_chat_answer_listener(client: Client, message: Message):
 
     async with LOCK:
         game = ACTIVE_FIGHTS.get(chat_id)
-        if not game or game.get("is_solved"):
+        if not game or game.get("is_solved") or game.get("is_advancing"):
             return
 
         user_id = message.from_user.id
         if user_id not in game["players"]:
             return
 
-        # Agar word match hota hai, tabhi round solve hoga
         if message.text.strip().lower() == game["word"].strip().lower():
             game["is_solved"] = True
+            game["is_advancing"] = True
 
-            # Purana timer task foran cancel karo
             if game.get("timer_task") and not game["timer_task"].done():
                 game["timer_task"].cancel()
 
@@ -504,9 +512,8 @@ async def fight_chat_answer_listener(client: Client, message: Message):
             if s.get("auto_delete") and win_msg:
                 asyncio.create_task(delete_after(win_msg, 3))
 
-            # Sahi jawab milte hi 1 second me agla round aayega
             await asyncio.sleep(1)
-            asyncio.create_task(fight_next(client, chat_id))
+            await fight_next(client, chat_id)
 
 
 # ============================================================
@@ -615,6 +622,7 @@ async def fight_callbacks_router(client: Client, query: CallbackQuery):
             "round": 0,
             "round_token": 0,
             "is_solved": False,
+            "is_advancing": False,
             "timer_task": None,
             "total_rounds": 10,
             "scores": defaultdict(int),
@@ -677,6 +685,7 @@ async def fight_callbacks_router(client: Client, query: CallbackQuery):
             "round": 0,
             "round_token": 0,
             "is_solved": False,
+            "is_advancing": False,
             "timer_task": None,
             "total_rounds": lobby["total_rounds"],
             "scores": defaultdict(int),
