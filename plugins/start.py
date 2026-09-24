@@ -6,21 +6,19 @@ from database import ensure_user, get_user
 from helpers import get_mention
 from utils.rich import send_jumble_rich
 
-START_BANNER_URL = "https://graph.org/file/7c0c03d68308f0c5dad42-ddb933df03f0ff0632.jpg"
+# Naya image URL
+START_BANNER_URL = "https://graph.org/file/ffb08ae20a8b09595d9ee-0798422a09215f7dc2.jpg"
 LOCAL_BANNER_PATH = "cache/start_banner.jpg"
 
 
 def get_cached_banner():
-    # File exist karti ho aur khali (0 bytes) na ho
+    # Agar local cache me valid image hai toh wahi use karo
     if os.path.isfile(LOCAL_BANNER_PATH) and os.path.getsize(LOCAL_BANNER_PATH) > 1000:
         return LOCAL_BANNER_PATH
 
+    os.makedirs("cache", exist_ok=True)
     try:
-        os.makedirs("cache", exist_ok=True)
-        # Purani zero-byte corrupt file hatao agar ho
-        if os.path.isfile(LOCAL_BANNER_PATH):
-            os.remove(LOCAL_BANNER_PATH)
-
+        # Browser user-agent ke saath download karo taaki CDN block na kare
         req = urllib.request.Request(
             START_BANNER_URL,
             headers={
@@ -35,8 +33,7 @@ def get_cached_banner():
     except Exception as e:
         print(f"[Banner Download Error]: {e}")
 
-    # Agar local cache fail ho toh direct URL pass karo fallback ke liye
-    return START_BANNER_URL
+    return None
 
 
 @Client.on_message(filters.command("start") & filters.private)
