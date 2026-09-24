@@ -19,11 +19,10 @@ def build_settings_card(chat_id: int, chat_title: str):
     st_text = "🟢 Running" if is_active else "🔴 Stopped"
     del_text = "🟢 Enabled" if auto_del else "🔴 Disabled"
 
-    # Regular Blue Blockquote (No expandable arrow)
     caption = (
         f"<blockquote>⚙️ <u><b>𝐉ᴜᴍʙʟᴇ 𝐆ʀᴏᴜᴘ 𝐒ᴇᴛᴛɪɴɢs</b></u>\n\n"
         f"👥 <b>Group :</b> <code>{chat_title}</code>\n"
-        f"🆔 <b>Chat ID :</b> <code>{chat_id}</code>\n\n"
+        f"🆔 <b>Chat ID :</b> <code>{chat_id}</code>\n"
         f"⚡ <b>Game Status :</b> {st_text}\n"
         f"🗑️ <b>Auto Delete :</b> {del_text}\n"
         f"🎯 <b>Default Mode :</b> <code>{cur_diff.title()}</code>\n"
@@ -52,17 +51,17 @@ def build_settings_card(chat_id: int, chat_title: str):
         ],
         [
             types.RichMessageButton(
-                text=f"{'🟢' if cur_diff=='easy' else '🔴'} Easy",
+                text="🟢 Easy" if cur_diff == "easy" else "🔴 Easy",
                 style=enums.ButtonStyle.SUCCESS if cur_diff == "easy" else enums.ButtonStyle.DANGER,
                 callback_data=f"set_diff|easy|{chat_id}",
             ),
             types.RichMessageButton(
-                text=f"{'🟢' if cur_diff=='medium' else '🔴'} Medium",
+                text="🟢 Medium" if cur_diff == "medium" else "🔴 Medium",
                 style=enums.ButtonStyle.SUCCESS if cur_diff == "medium" else enums.ButtonStyle.DANGER,
                 callback_data=f"set_diff|medium|{chat_id}",
             ),
             types.RichMessageButton(
-                text=f"{'🟢' if cur_diff=='hard' else '🔴'} Hard",
+                text="🟢 Hard" if cur_diff == "hard" else "🔴 Hard",
                 style=enums.ButtonStyle.SUCCESS if cur_diff == "hard" else enums.ButtonStyle.DANGER,
                 callback_data=f"set_diff|hard|{chat_id}",
             ),
@@ -86,30 +85,44 @@ def build_settings_card(chat_id: int, chat_title: str):
 def build_timers_card(chat_id: int):
     raw_s = get_settings(chat_id)
     s = dict(raw_s) if raw_s else {}
-    cur_diff = s.get("default_diff", "medium")
-    cur_val = s.get(cur_diff, 120)
+    cur_diff = str(s.get("default_diff", "medium")).lower()
+    cur_val = int(s.get(cur_diff, 120))
 
     caption = (
-        f"<blockquote>⏱️ <u><b>Choose {cur_diff.title()} Timers</b></u>\n\n"
-        f"Current Duration: <b>{cur_val}s</b>\n"
-        f"Active timer is highlighted in Green:</blockquote>"
+        f"<blockquote>⏱️ <u><b>𝐂𝐇𝐎𝐎𝐒𝐄 𝐑𝐎𝐔𝐍𝐃 𝐓𝐈𝐌𝐄𝐑𝐒 ({cur_diff.upper()})</b></u>\n\n"
+        f"Selected Duration: <b>{cur_val}s</b>\n"
+        f"Active timer is <b>Green</b>, others are <b>Red</b>. Tap any to switch:</blockquote>"
     )
 
-    options = [30, 45, 60, 120, 300, 600]
-    row1 = []
-    row2 = []
-    for opt in options[:3]:
-        style = enums.ButtonStyle.SUCCESS if cur_val == opt else enums.ButtonStyle.DANGER
-        row1.append(types.RichMessageButton(text=f"{'🟢' if cur_val==opt else '🔴'} {opt}s", style=style, callback_data=f"set_timer_val|{cur_diff}|{opt}|{chat_id}"))
-    for opt in options[3:]:
-        style = enums.ButtonStyle.SUCCESS if cur_val == opt else enums.ButtonStyle.DANGER
-        row2.append(types.RichMessageButton(text=f"{'🟢' if cur_val==opt else '🔴'} {opt}s", style=style, callback_data=f"set_timer_val|{cur_diff}|{opt}|{chat_id}"))
+    timer_choices = [30, 45, 60, 90, 120, 180, 300, 600]
+    row1, row2, row3 = [], [], []
+
+    for idx, opt in enumerate(timer_choices):
+        is_selected = (cur_val == opt)
+        style = enums.ButtonStyle.SUCCESS if is_selected else enums.ButtonStyle.DANGER
+        label = f"🟢 {opt}s" if is_selected else f"🔴 {opt}s"
+        btn = types.RichMessageButton(
+            text=label,
+            style=style,
+            callback_data=f"set_timer_val|{cur_diff}|{opt}|{chat_id}"
+        )
+        if idx < 3:
+            row1.append(btn)
+        elif idx < 6:
+            row2.append(btn)
+        else:
+            row3.append(btn)
 
     buttons = [
         row1,
         row2,
+        row3,
         [
-            types.RichMessageButton(text="🔙 Back to Settings", style=enums.ButtonStyle.PRIMARY, callback_data=f"set_back_main|{chat_id}")
+            types.RichMessageButton(
+                text="🔙 Back to Settings",
+                style=enums.ButtonStyle.PRIMARY,
+                callback_data=f"set_back_main|{chat_id}"
+            )
         ]
     ]
     return caption, buttons
@@ -154,7 +167,7 @@ async def settings_callback_router(client: Client, query: CallbackQuery):
         diff = data[1]
         DB.execute("UPDATE settings SET default_diff=? WHERE chat_id=?", (diff, chat_id))
         DB.commit()
-        await query.answer(f"Mode: {diff.upper()}")
+        await query.answer(f"Mode switched to: {diff.upper()}")
 
     elif action == "set_menu_timers":
         caption, buttons = build_timers_card(chat_id)
@@ -168,17 +181,21 @@ async def settings_callback_router(client: Client, query: CallbackQuery):
         secs = int(data[2])
         DB.execute(f"UPDATE settings SET {diff}=? WHERE chat_id=?", (secs, chat_id))
         DB.commit()
-        await query.answer(f"{diff.upper()} Timer: {secs}s")
+        await query.answer(f"{diff.upper()} timer set to {secs}s!")
         caption, buttons = build_timers_card(chat_id)
         blocks = html_to_rich_blocks(caption)
         for r in buttons:
             blocks.append(types.InputRichBlockButtons(buttons=r))
         return await query.message.edit_rich_message(rich_message=types.InputRichMessage(blocks=blocks))
 
+    elif action == "set_back_main":
+        await query.answer()
+
     elif action == "set_close_panel":
         await query.message.delete()
         return await query.answer("Closed!")
 
+    # Redraw Main Settings Page
     caption, buttons = build_settings_card(chat_id, query.message.chat.title or "Group")
     blocks = html_to_rich_blocks(caption)
     for r in buttons:
