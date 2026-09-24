@@ -6,19 +6,16 @@ from database import ensure_user, get_user
 from helpers import get_mention
 from utils.rich import send_jumble_rich
 
-# Naya image URL
 START_BANNER_URL = "https://graph.org/file/ffb08ae20a8b09595d9ee-0798422a09215f7dc2.jpg"
 LOCAL_BANNER_PATH = "cache/start_banner.jpg"
 
 
 def get_cached_banner():
-    # Agar local cache me valid image hai toh wahi use karo
     if os.path.isfile(LOCAL_BANNER_PATH) and os.path.getsize(LOCAL_BANNER_PATH) > 1000:
         return LOCAL_BANNER_PATH
 
     os.makedirs("cache", exist_ok=True)
     try:
-        # Browser user-agent ke saath download karo taaki CDN block na kare
         req = urllib.request.Request(
             START_BANNER_URL,
             headers={
@@ -81,7 +78,7 @@ async def dm_start_handler(client: Client, message: Message):
             ),
             types.RichMessageButton(
                 text="👤 My Stats",
-                style=enums.ButtonStyle.DEFAULT,
+                style=enums.ButtonStyle.DANGER,  # Red Button Style
                 callback_data="show_my_stats",
             ),
         ]
