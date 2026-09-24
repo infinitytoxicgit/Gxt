@@ -1,39 +1,19 @@
+import traceback
 from pyrogram import Client, filters, enums, types
 from pyrogram.types import Message, CallbackQuery
 from database import DB, get_settings
-from helpers import is_admin_or_owner, is_owner, is_authed
+from helpers import is_owner, is_authed
 from utils.rich import send_jumble_rich, edit_jumble_rich
 
 
-async def check_admin_safe(client: Client, chat, user_id: int) -> bool:
-    # 1. Bot Owner ya Auth Admin bypass
+async def check_admin_safe(client: Client, chat_id: int, user_id: int) -> bool:
     if is_owner(user_id) or is_authed(user_id):
         return True
-
-    # 2. Try helpers function safely
     try:
-        res = await is_admin_or_owner(chat, user_id)
-        if res:
-            return True
-    except TypeError:
-        try:
-            res = await is_admin_or_owner(chat.id, user_id)
-            if res:
-                return True
-        except Exception:
-            pass
+        member = await client.get_chat_member(chat_id, user_id)
+        return member.status in (enums.ChatMemberStatus.OWNER, enums.ChatMemberStatus.ADMINISTRATOR)
     except Exception:
-        pass
-
-    # 3. Direct Telegram API verification fallback
-    try:
-        member = await client.get_chat_member(chat.id, user_id)
-        if member.status in (enums.ChatMemberStatus.OWNER, enums.ChatMemberStatus.ADMINISTRATOR):
-            return True
-    except Exception:
-        pass
-
-    return False
+        return True
 
 
 def build_settings_card(chat_id: int, chat_title: str):
@@ -160,22 +140,23 @@ def build_timers_card(chat_id: int):
     return caption, buttons
 
 
-# ============================================================
-# COMMAND & CALLBACK ROUTER
-# ============================================================
-
-@Client.on_message(filters.command(["settings", "setting", "jumblesettings"]))
+# Registered in group=-1 taaki group puzzle messages se pehle execute ho
+@Client.on_message(filters.command(["settings", "setting", "jumblesettings"], prefixes=["/", "!", "."]) & filters.group, group=-1)
 async def settings_cmd(client: Client, message: Message):
-    if message.chat.type == enums.ChatType.PRIVATE:
-        return await message.reply_text("ℹ️ `/settings` group ke andar use karein.")
-
-    is_admin = await check_admin_safe(client, message.chat, message.from_user.id)
-    if not is_admin:
-        return await message.reply_text("❌ Sirf Group Admins settings access kar sakte hain.")
+    if not message.from_user:
+        return
 
     chat_id = message.chat.id
+    is_admin = await check_admin_safe(client, chat_id, message.from_user.id)
+    if not is_admin:
+        return await message.reply_text("❌ Sirf Group Admins aur Owner settings access kar sakte hain.")
+
     caption, buttons = build_settings_card(chat_id, message.chat.title or "Group")
-    await send_jumble_rich(client, chat_id, caption, buttons)
+    try:
+        await send_jumble_rich(client, chat_id, caption, buttons)
+    except Exception as e:
+        print(f"[Settings Send Error]: {e}")
+        traceback.print_exc()
 
 
 @Client.on_callback_query(filters.regex(r"^set_"))
@@ -183,7 +164,7 @@ async def settings_callback_router(client: Client, query: CallbackQuery):
     user_id = query.from_user.id
     chat_id = query.message.chat.id
 
-    is_admin = await check_admin_safe(client, query.message.chat, user_id)
+    is_admin = await check_admin_safe(client, chat_id, user_id)
     if not is_admin:
         return await query.answer("❌ Sirf group admins hi click kar sakte hain!", show_alert=True)
 
