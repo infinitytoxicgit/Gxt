@@ -1,6 +1,7 @@
 import io
 import os
-import random
+import re
+import unicodedata
 from PIL import Image, ImageDraw, ImageFont
 
 def get_font(size: int, bold: bool = True):
@@ -18,6 +19,17 @@ def get_font(size: int, bold: bool = True):
                 pass
     return ImageFont.load_default()
 
+def clean_text_safe(text: str) -> str:
+    if not text:
+        return "Player"
+    # Fancy math/stylish fonts ko standard ASCII me normalize karo
+    norm = unicodedata.normalize('NFKD', str(text))
+    # Non-printable characters aur raw unsupported symbols hatao jo box create karte hain
+    cleaned = "".join([c for c in norm if c.isprintable() and ord(c) < 128]).strip()
+    # Extra symbols clean karo
+    cleaned = re.sub(r'[^\w\s\-\.\@\$\#]', '', cleaned).strip()
+    return cleaned if cleaned else "Player"
+
 def make_puzzle_image(jumbled, mode_tag, puzzle_id):
     width, height = 1200, 650
     img = Image.new("RGBA", (width, height), (15, 18, 28, 255))
@@ -30,7 +42,6 @@ def make_puzzle_image(jumbled, mode_tag, puzzle_id):
 
     draw.rounded_rectangle([(18, 18), (width - 18, height - 18)], radius=28, outline=(0, 229, 255, 200), width=4)
 
-    # Standard ASCII text - No boxes
     header_font = get_font(44, bold=True)
     draw.text((width // 2, 75), "JUMBLE WORD GAME", anchor="mm", font=header_font, fill=(255, 255, 255))
 
@@ -77,8 +88,10 @@ def make_stats_graph_image(user_name: str, easy: int, med: int, hard: int, rank:
     img = Image.new("RGBA", (w, h), (18, 22, 34, 255))
     draw = ImageDraw.Draw(img)
 
+    safe_name = clean_text_safe(user_name)
+
     draw.rounded_rectangle([(16, 16), (w - 16, h - 16)], radius=24, outline=(80, 140, 255, 220), width=3)
-    draw.text((w // 2, 60), f"PERFORMANCE MATRIX - {user_name.upper()}", font=get_font(34, bold=True), fill=(255, 255, 255), anchor="mm")
+    draw.text((w // 2, 60), f"PERFORMANCE MATRIX - {safe_name.upper()}", font=get_font(34, bold=True), fill=(255, 255, 255), anchor="mm")
     draw.text((w // 2, 105), f"RANK: LEVEL {rank}   |   EXP: {exp} / {max_exp}", font=get_font(24, bold=True), fill=(0, 220, 255), anchor="mm")
 
     draw.rounded_rectangle([(90, 140), (w - 90, 172)], radius=16, fill=(35, 42, 60))
@@ -103,7 +116,7 @@ def make_stats_graph_image(user_name: str, easy: int, med: int, hard: int, rank:
             draw.rounded_rectangle([(90, y + 36), (90 + bar_len, y + 62)], radius=12, fill=color)
 
     os.makedirs("cache", exist_ok=True)
-    out_path = f"cache/stats_{user_name}.png"
+    out_path = f"cache/stats_{safe_name}.png"
     img.save(out_path, "PNG")
     return out_path
 
@@ -112,9 +125,12 @@ def make_leaderboard_graph_image(scope_title: str, timeframe: str, top_data: lis
     img = Image.new("RGBA", (w, h), (16, 20, 30, 255))
     draw = ImageDraw.Draw(img)
 
+    clean_scope = clean_text_safe(scope_title)
+    clean_tf = clean_text_safe(timeframe)
+
     draw.rounded_rectangle([(16, 16), (w - 16, h - 16)], radius=24, outline=(0, 255, 200, 220), width=3)
-    draw.text((w // 2, 60), f"LEADERBOARD - {scope_title.upper()}", font=get_font(34, bold=True), fill=(255, 255, 255), anchor="mm")
-    draw.text((w // 2, 105), f"TIMEFRAME: {timeframe.upper()}", font=get_font(24, bold=True), fill=(0, 220, 255), anchor="mm")
+    draw.text((w // 2, 60), f"LEADERBOARD - {clean_scope.upper()}", font=get_font(34, bold=True), fill=(255, 255, 255), anchor="mm")
+    draw.text((w // 2, 105), f"TIMEFRAME: {clean_tf.upper()}", font=get_font(24, bold=True), fill=(0, 220, 255), anchor="mm")
 
     if not top_data:
         draw.text((w // 2, 350), "No solves recorded in this timeframe yet.", font=get_font(26, bold=False), fill=(180, 190, 210), anchor="mm")
@@ -127,7 +143,7 @@ def make_leaderboard_graph_image(scope_title: str, timeframe: str, top_data: lis
             y = start_y + (idx * 90)
             color = colors[idx] if idx < len(colors) else (180, 200, 220)
 
-            name = str(row["name"])[:14]
+            name = clean_text_safe(str(row["name"]))[:14]
             score = row["score"]
 
             draw.text((90, y), f"#{idx + 1}  {name}", font=get_font(26, bold=True), fill=(255, 255, 255))
@@ -139,6 +155,6 @@ def make_leaderboard_graph_image(scope_title: str, timeframe: str, top_data: lis
                 draw.rounded_rectangle([(90, y + 36), (90 + bar_w, y + 64)], radius=12, fill=color)
 
     os.makedirs("cache", exist_ok=True)
-    out_path = f"cache/leaderboard_{timeframe}.png"
+    out_path = f"cache/leaderboard_{clean_tf}.png"
     img.save(out_path, "PNG")
     return out_path
