@@ -1,8 +1,14 @@
 import asyncio
 import time
 from database import DB, get_settings, get_global_config, ensure_user, get_user
-from helpers import clean_answer, get_mention, safe_delete_and_unpin, delete_after, LOCK, send_log_event
-from plugins.fight import ACTIVE_FIGHTS, fight_next
+from helpers import (
+    clean_answer, 
+    get_mention, 
+    safe_delete_and_unpin, 
+    delete_after, 
+    send_log_event, 
+    ACTIVE_FIGHTS
+)
 from plugins.game_core import start_game
 from pyrogram import Client, filters, enums, types
 from pyrogram.types import Message
@@ -34,27 +40,14 @@ async def group_answer_handler(client: Client, message: Message):
     if not cleaned_input:
         return
 
-    now = time.time()
-
-    # 1. Fight Answer Check
+    # Agar match/fight chal rahi hai toh ye listener chup-chaap return ho jayega.
+    # Fight ke answers sirf plugins/fight.py handle karega!
     if chat_id in ACTIVE_FIGHTS:
-        async with LOCK:
-            game = ACTIVE_FIGHTS.get(chat_id)
-            if not game or user_id not in game["players"]:
-                return
-            if now <= game["expires"] and cleaned_input == clean_answer(game["word"]):
-                if game.get("task") and not game["task"].done():
-                    game["task"].cancel()
-                game["scores"][user_id] += 1
-                u_mention = get_mention(message.from_user)
-                fight_caption = f"<blockquote><emoji id=5895705279416241926>⚡</emoji> <u><b>ROUND {game['round']} WON!</b></u>\n\n{u_mention} scored this round!</blockquote>"
-                await send_jumble_rich(client, chat_id, fight_caption)
-                await asyncio.sleep(2.5)
-                asyncio.create_task(fight_next(client, chat_id))
-                return
         return
 
-    # 2. Normal Puzzle Check
+    now = time.time()
+
+    # Normal Puzzle Answer Check
     game = DB.execute("SELECT * FROM games WHERE chat_id=? AND solved=0", (chat_id,)).fetchone()
     if not game or now > game["expires"]:
         return
