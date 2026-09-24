@@ -4,7 +4,7 @@ import random
 import time
 from collections import defaultdict
 
-from database import DB, get_settings, ensure_user, get_user
+from database import DB, get_settings, ensure_user, get_user, get_global_config
 from helpers import LOCK, safe_delete_and_unpin, delete_after, get_mention, is_group
 from image_gen import make_puzzle_image
 from plugins.game_core import ACTIVE_FIGHTS, start_game
@@ -34,9 +34,9 @@ def build_fight_lobby_card(lobby_data):
         f"<blockquote>👤 <b>Challenger :</b> {m1}\n"
         f"🎯 <b>Opponent :</b> {m2}\n"
         f"{bet_line}"
-        f"🏆 <b>Total Rounds :</b> <code>{rounds} Rounds</code>\n"
-        f"⏱️ <b>Round Timer :</b> <code>{timer}s</code> | <b>Mode:</b> <code>{diff.title()}</code></blockquote>\n\n"
-        "<blockquote><i>Opponent tap Accept Challenge to duel!</i></blockquote>"
+        f"🏆 <b>Match Length :</b> <code>{rounds} Rounds</code>\n"
+        f"⏱️ <b>Round Timer :</b> <code>{timer}s</code> | <b>Mode :</b> <code>{diff.title()}</code></blockquote>\n\n"
+        "<blockquote><i>Choose rounds & rules below, then tap Accept Challenge!</i></blockquote>"
     )
 
     r_list = [10, 20, 30, 40, 50]
@@ -129,12 +129,17 @@ async def fight_next(client: Client, chat_id: int):
     header_icon = "💰" if game.get("is_bet") else "⚔️"
     header_name = "𝐉𝐔𝐌𝐁𝐋𝐄 𝐁𝐄𝐓 𝐅𝐈𝐆𝐇𝐓" if game.get("is_bet") else "𝐉𝐔𝐌𝐁𝐋𝐄 𝐅𝐈𝐆𝐇𝐓"
     extra_info = f"\n💵 <b>Stake Pot:</b> <code>{game.get('bet_amount')} pts</code>" if game.get("is_bet") else ""
+    hint_limit = int(get_global_config(f"hints_{diff}", 3))
+
+    p1, p2 = game["players"]
+    score_board = f"📊 <b>Score :</b> {game['mentions'][p1]} (<code>{game['scores'][p1]}</code>) vs {game['mentions'][p2]} (<code>{game['scores'][p2]}</code>)"
 
     caption = (
         f"<blockquote>{header_icon} <u><b>{header_name} — ROUND {game['round']}/{total_r}</b></u></blockquote>\n\n"
-        f"<blockquote>🎯 <b>Difficulty :</b> <code>{diff.title()}</code> | ⏱️ <b>Time:</b> <code>{game['timer']}s</code>{extra_info}\n"
-        f"👥 <b>Duelists :</b> {game['mentions'][game['players'][0]]} 🆚 {game['mentions'][game['players'][1]]}</blockquote>\n\n"
-        "<blockquote>🔀 <i>Unscramble letters and type in chat to score!</i></blockquote>"
+        f"<blockquote>🎯 <b>Difficulty :</b> <code>{diff.title()}</code> | ⏱️ <b>Time :</b> <code>{game['timer']}s</code>{extra_info}\n"
+        f"💡 <b>Equal Hints :</b> <code>{hint_limit}/player</code>\n"
+        f"{score_board}</blockquote>\n\n"
+        "<blockquote>🔀 <i>Unscramble letters and send in chat to score!</i></blockquote>"
     )
 
     buttons = [
@@ -148,7 +153,13 @@ async def fight_next(client: Client, chat_id: int):
     ]
 
     try:
-        sent = await send_jumble_rich(client, chat_id, caption, buttons, photo=image_path if os.path.isfile(str(image_path)) else None)
+        sent = await send_jumble_rich(
+            client,
+            chat_id,
+            caption,
+            buttons,
+            photo=image_path if (image_path and os.path.isfile(str(image_path))) else None
+        )
         game["msg_id"] = sent.id
         try:
             await sent.pin(disable_notification=True)
@@ -207,6 +218,7 @@ async def finish_fight(client: Client, chat_id: int):
                 total_pot = (bet_amt * 2) + 100
                 DB.execute("UPDATE users SET points=points+?, stars=stars+?, bet_wins=bet_wins+1 WHERE user_id=?", (total_pot, total_pot, winner))
                 DB.execute("UPDATE users SET bet_losses=bet_losses+1 WHERE user_id=?", (loser,))
+                DB.execute("INSERT INTO score_history (user_id, chat_id, points, timestamp) VALUES (?, ?, ?, ?)", (winner, chat_id, total_pot, now))
                 DB.commit()
                 result_caption = (
                     "<blockquote>💰 <u><b>COMEBACK RE-BET OVER!</b></u></blockquote>\n\n"
@@ -221,6 +233,8 @@ async def finish_fight(client: Client, chat_id: int):
 
                 DB.execute("UPDATE users SET points=points+?, stars=stars+?, bet_wins=bet_wins+1 WHERE user_id=?", (win_reward, win_reward, winner))
                 DB.execute("UPDATE users SET points=points+?, stars=stars+?, bet_losses=bet_losses+1 WHERE user_id=?", (loser_cashback, loser_cashback, loser))
+                DB.execute("INSERT INTO score_history (user_id, chat_id, points, timestamp) VALUES (?, ?, ?, ?)", (winner, chat_id, win_reward, now))
+                DB.execute("INSERT INTO score_history (user_id, chat_id, points, timestamp) VALUES (?, ?, ?, ?)", (loser, chat_id, loser_cashback, now))
                 DB.commit()
 
                 REBET_LOBBY[chat_id] = {
@@ -367,15 +381,85 @@ async def bet_fight_cmd(client: Client, message: Message):
 
 
 # ============================================================
-# LOBBY CALLBACKS (Accept, Decline, Configure, Rebet)
+# FIGHT SOLVE DETECTOR (In-Chat Text Answers)
 # ============================================================
 
-@Client.on_callback_query(filters.regex(r"^(f_|rebet_)"))
+@Client.on_message(filters.text & filters.group, group=0)
+async def fight_chat_answer_listener(client: Client, message: Message):
+    if not message.text or message.text.startswith("/"):
+        return
+
+    chat_id = message.chat.id
+    if chat_id not in ACTIVE_FIGHTS:
+        return
+
+    game = ACTIVE_FIGHTS[chat_id]
+    user_id = message.from_user.id
+
+    if user_id not in game["players"]:
+        return
+
+    if message.text.strip().lower() == game["word"].strip().lower():
+        if game.get("task") and not game["task"].done():
+            game["task"].cancel()
+
+        game["scores"][user_id] += 1
+        s = dict(get_settings(chat_id)) if get_settings(chat_id) else {}
+        if s.get("auto_delete") and game.get("msg_id"):
+            await safe_delete_and_unpin(client, chat_id, game["msg_id"])
+
+        win_msg = await send_jumble_rich(
+            client,
+            chat_id,
+            f"<blockquote>🎯 <b>ROUND {game['round']} SOLVED!</b>\n\n"
+            f"👤 <b>Point Scorer :</b> {game['mentions'][user_id]}\n"
+            f"✅ <b>Word was :</b> <code>{game['word'].upper()}</code>\n"
+            f"🔄 <i>Next round in 2 seconds...</i></blockquote>"
+        )
+        if s.get("auto_delete") and win_msg:
+            asyncio.create_task(delete_after(win_msg, 4))
+
+        await asyncio.sleep(2)
+        asyncio.create_task(fight_next(client, chat_id))
+
+
+# ============================================================
+# LOBBY & HINTS CALLBACKS
+# ============================================================
+
+@Client.on_callback_query(filters.regex(r"^(f_|rebet_|fight_hint)"))
 async def fight_callbacks_router(client: Client, query: CallbackQuery):
     chat_id = query.message.chat.id
     user_id = query.from_user.id
     data = query.data.split("|")
     action = data[0]
+
+    # Equal Hint Handling during Fight
+    if action == "fight_hint":
+        game = ACTIVE_FIGHTS.get(chat_id)
+        if not game:
+            return await query.answer("Duel expired ya active nahi hai.", show_alert=True)
+        if user_id not in game["players"]:
+            return await query.answer("Sirf dono duelists hi hint le sakte hain!", show_alert=True)
+
+        diff = game["difficulty"]
+        hint_limit = int(get_global_config(f"hints_{diff}", 3))
+        user_hint = game["round_hints"][user_id]
+
+        if user_hint["count"] >= hint_limit:
+            return await query.answer(f"❌ Is round ke aapke {hint_limit} hints pure ho gaye!", show_alert=True)
+
+        word = game["word"]
+        avail = [i for i in range(len(word)) if i not in user_hint["indices"]]
+        if not avail:
+            return await query.answer("Aur clues nahi hain!", show_alert=True)
+
+        chosen = random.choice(avail)
+        user_hint["indices"].append(chosen)
+        user_hint["count"] += 1
+
+        letter = word[chosen].upper()
+        return await query.answer(f"💡 Clue #{chosen + 1} is: '{letter}' ({hint_limit - user_hint['count']} hints left)", show_alert=True)
 
     # Rebet Challenge
     if action == "rebet_challenge":
@@ -456,9 +540,9 @@ async def fight_callbacks_router(client: Client, query: CallbackQuery):
         await query.message.delete()
         return await query.answer("Challenge declined.")
 
-    # Configurations: Sirf challenger ya opponent customize kar sakein
+    # Configurations: Challenger ya Opponent adjust kar sakte hain
     if user_id not in (lobby["p1"], lobby["p2"]):
-        return await query.answer("Sirf dono duelists settings adjust kar sakte hain!", show_alert=True)
+        return await query.answer("Sirf duelists settings adjust kar sakte hain!", show_alert=True)
 
     if action == "f_diff":
         lobby["difficulty"] = data[1]
