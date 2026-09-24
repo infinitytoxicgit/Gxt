@@ -108,13 +108,14 @@ async def fight_timeout_task(client: Client, chat_id: int, current_round: int, r
     game = ACTIVE_FIGHTS.get(chat_id)
     if not game:
         return
+
+    # Check whether this round was already solved or token mismatched
     if game.get("round") != current_round or game.get("round_token") != round_token or game.get("is_solved"):
         return
 
-    # Mark solved to block duplicate timeouts
     game["is_solved"] = True
+    word = game.get("word", "")
 
-    word = game["word"]
     s = dict(get_settings(chat_id)) if get_settings(chat_id) else {}
     if s.get("auto_delete") and game.get("msg_id"):
         await safe_delete_and_unpin(client, chat_id, game["msg_id"])
@@ -128,11 +129,12 @@ async def fight_timeout_task(client: Client, chat_id: int, current_round: int, r
         t_msg = await send_jumble_rich(client, chat_id, caption)
         if s.get("auto_delete") and t_msg:
             asyncio.create_task(delete_after(t_msg, 4))
-    except Exception:
-        pass
+    except Exception as e:
+        print(f"[Timeout Broadcast Error]: {e}")
 
     await asyncio.sleep(3)
-    await fight_next(client, chat_id)
+    # Direct reliable advance
+    asyncio.create_task(fight_next(client, chat_id))
 
 
 async def fight_next(client: Client, chat_id: int):
@@ -140,7 +142,7 @@ async def fight_next(client: Client, chat_id: int):
     if not game:
         return
 
-    # Cancel previous timer cleanly
+    # Cancel previous timer task cleanly
     if game.get("timer_task") and not game["timer_task"].done():
         try:
             game["timer_task"].cancel()
@@ -168,7 +170,11 @@ async def fight_next(client: Client, chat_id: int):
     timer_val = game["timer"]
 
     fight_tag = "BET FIGHT" if game.get("is_bet") else "FIGHT"
-    image_path = make_puzzle_image(jumbled, f"{fight_tag} {diff.upper()}", round_num)
+    try:
+        image_path = make_puzzle_image(jumbled, f"{fight_tag} {diff.upper()}", round_num)
+    except Exception as img_err:
+        print(f"Image error: {img_err}")
+        image_path = None
 
     header_icon = "💰" if game.get("is_bet") else "⚔️"
     header_name = "𝐉𝐔𝐌𝐁𝐋𝐄 𝐁𝐄𝐓 𝐅𝐈𝐆𝐇𝐓" if game.get("is_bet") else "𝐉𝐔𝐌𝐁𝐋𝐄 𝐅𝐈𝐆𝐇𝐓"
@@ -204,14 +210,16 @@ async def fight_next(client: Client, chat_id: int):
             buttons,
             photo=image_path if (image_path and os.path.isfile(str(image_path))) else None
         )
-        game["msg_id"] = sent.id
-        try:
-            await sent.pin(disable_notification=True)
-        except Exception:
-            pass
+        if sent:
+            game["msg_id"] = sent.id
+            try:
+                await sent.pin(disable_notification=True)
+            except Exception:
+                pass
     except Exception as e:
         print(f"Fight dispatch error: {e}")
 
+    # Launch next round countdown timer
     game["timer_task"] = asyncio.create_task(fight_timeout_task(client, chat_id, round_num, token, timer_val))
 
 
@@ -470,7 +478,7 @@ async def bet_fight_cmd(client: Client, message: Message):
 
 
 # ============================================================
-# FIGHT SOLVE DETECTOR (In-Chat Text Answers - NO DEADLOCK)
+# FIGHT SOLVE DETECTOR (In-Chat Text Answers)
 # ============================================================
 
 @Client.on_message(filters.text & filters.group, group=0)
@@ -490,9 +498,8 @@ async def fight_chat_answer_listener(client: Client, message: Message):
     if user_id not in game["players"]:
         return
 
-    # Sahi jawab verify karo
-    if message.text.strip().lower() == str(game["word"]).strip().lower():
-        # Instant state mark karo taaki race triggers na ho
+    # Check correct answer match
+    if message.text.strip().lower() == str(game.get("word", "")).strip().lower():
         game["is_solved"] = True
 
         if game.get("timer_task") and not game["timer_task"].done():
@@ -512,15 +519,14 @@ async def fight_chat_answer_listener(client: Client, message: Message):
             chat_id,
             f"<blockquote>🎯 <b>ROUND {game['round']} SOLVED!</b>\n\n"
             f"👤 <b>Point Scorer :</b> {game['mentions'][user_id]}\n"
-            f"✅ <b>Word was :</b> <code>{game['word'].upper()}</code>\n"
+            f"✅ <b>Word was :</b> <code>{str(game.get('word', '')).upper()}</code>\n"
             f"🔄 <i>Next round in 1 second...</i></blockquote>"
         )
         if s.get("auto_delete") and win_msg:
             asyncio.create_task(delete_after(win_msg, 3))
 
-        # Direct smooth advance without deadlock
         await asyncio.sleep(1)
-        await fight_next(client, chat_id)
+        asyncio.create_task(fight_next(client, chat_id))
 
 
 # ============================================================
@@ -644,7 +650,7 @@ async def fight_callbacks_router(client: Client, query: CallbackQuery):
         del REBET_LOBBY[chat_id]
         await query.answer(f"Comeback Duel Accepted! {req_amt} Stars Deducted.")
         await query.message.delete()
-        await fight_next(client, chat_id)
+        asyncio.create_task(fight_next(client, chat_id))
         return
 
     if action == "rebet_decline":
@@ -707,7 +713,7 @@ async def fight_callbacks_router(client: Client, query: CallbackQuery):
         status_txt = f"Duel Accepted! {lobby['bet_amount']} Stars deducted." if lobby["is_bet"] else "Duel Accepted! Starting..."
         await query.answer(status_txt)
         await query.message.delete()
-        await fight_next(client, chat_id)
+        asyncio.create_task(fight_next(client, chat_id))
         return
 
     elif action == "f_decline":
