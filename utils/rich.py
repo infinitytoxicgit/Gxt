@@ -1,6 +1,7 @@
 import math
 import os
 import re
+import urllib.request
 import traceback
 from pyrogram import enums, types
 
@@ -159,17 +160,29 @@ def make_exp_slider_row(curr_exp: int, max_exp: int = 500):
         ]
     )
 
+def _resolve_photo_path(photo):
+    if not photo:
+        return None
+    if isinstance(photo, str) and (photo.startswith("http://") or photo.startswith("https://")):
+        os.makedirs("cache", exist_ok=True)
+        local_path = "cache/banner_downloaded.jpg"
+        if not os.path.exists(local_path):
+            try:
+                urllib.request.urlretrieve(photo, local_path)
+            except Exception as e:
+                print(f"[Photo Download Error]: {e}")
+                return None
+        return local_path
+    elif isinstance(photo, str) and os.path.isfile(photo):
+        return photo
+    return None
+
 async def send_jumble_rich(client, chat_id: int, caption_html: str, rich_buttons_rows: list = None, slider_row=None, photo=None):
     blocks = []
-    if photo:
-        if isinstance(photo, str) and os.path.isfile(photo):
-            blocks.append(types.InputRichBlockPhoto(photo=types.InputMediaPhoto(photo)))
-        elif hasattr(photo, "read"):
-            tmp_p = f"cache/tmp_{int(math.floor(photo.tell() if hasattr(photo, 'tell') else 1))}.png"
-            os.makedirs("cache", exist_ok=True)
-            with open(tmp_p, "wb") as f:
-                f.write(photo.read())
-            blocks.append(types.InputRichBlockPhoto(photo=types.InputMediaPhoto(tmp_p)))
+    
+    photo_file = _resolve_photo_path(photo)
+    if photo_file and os.path.isfile(photo_file):
+        blocks.append(types.InputRichBlockPhoto(photo=types.InputMediaPhoto(photo_file)))
 
     blocks.extend(html_to_rich_blocks(caption_html))
     if slider_row:
@@ -182,38 +195,18 @@ async def send_jumble_rich(client, chat_id: int, caption_html: str, rich_buttons
                 blocks.append(types.InputRichBlockButtons(buttons=row))
 
     try:
-        if hasattr(client, "send_rich_message"):
-            return await client.send_rich_message(
-                chat_id=chat_id,
-                rich_message=types.InputRichMessage(blocks=blocks),
-            )
-        else:
-            return await client.send_message(
-                chat_id=chat_id,
-                text="",
-                rich_message=types.InputRichMessage(blocks=blocks)
-            )
+        return await client.send_rich_message(
+            chat_id=chat_id,
+            rich_message=types.InputRichMessage(blocks=blocks),
+        )
     except Exception as e:
         print(f"[send_jumble_rich Fail]: {e}")
-        traceback.print_exc()
-
-        # Fallback to standard InlineKeyboard format if Rich fails
-        ikm_rows = []
-        if rich_buttons_rows:
-            for r in rich_buttons_rows:
-                row_btns = []
-                btns_list = r.buttons if isinstance(r, types.InputRichBlockButtons) else r
-                for b in btns_list:
-                    if hasattr(b, "url") and b.url:
-                        row_btns.append(types.InlineKeyboardButton(text=b.text, url=b.url))
-                    else:
-                        row_btns.append(types.InlineKeyboardButton(text=b.text, callback_data=b.callback_data))
-                ikm_rows.append(row_btns)
-
-        reply_markup = types.InlineKeyboardMarkup(ikm_rows) if ikm_rows else None
-        if photo and os.path.isfile(str(photo)):
-            return await client.send_photo(chat_id=chat_id, photo=photo, caption=caption_html, parse_mode=enums.ParseMode.HTML, reply_markup=reply_markup)
-        return await client.send_message(chat_id=chat_id, text=caption_html, parse_mode=enums.ParseMode.HTML, reply_markup=reply_markup)
+        # Secondary fallback directly to message
+        return await client.send_message(
+            chat_id=chat_id,
+            text="",
+            rich_message=types.InputRichMessage(blocks=blocks)
+        )
 
 async def edit_jumble_rich(client, chat_id: int, message_id: int, caption_html: str, rich_buttons_rows: list = None, slider_row=None):
     blocks = html_to_rich_blocks(caption_html)
