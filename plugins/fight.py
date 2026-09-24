@@ -95,6 +95,7 @@ def build_fight_lobby_card(lobby_data):
 
 async def fight_timeout_task(client: Client, chat_id: int, current_round: int, round_token: int, timer_duration: int):
     try:
+        # Exact utna wait karega jitna timer set hai (jaise 30s, 45s, 60s)
         await asyncio.sleep(timer_duration)
     except asyncio.CancelledError:
         return
@@ -103,12 +104,10 @@ async def fight_timeout_task(client: Client, chat_id: int, current_round: int, r
         game = ACTIVE_FIGHTS.get(chat_id)
         if not game:
             return
-        if game.get("round") != current_round or game.get("round_token") != round_token or game.get("is_solved") or game.get("is_advancing"):
+        if game.get("round") != current_round or game.get("round_token") != round_token or game.get("is_solved"):
             return
 
         game["is_solved"] = True
-        game["is_advancing"] = True
-
         word = game["word"]
         s = dict(get_settings(chat_id)) if get_settings(chat_id) else {}
         if s.get("auto_delete") and game.get("msg_id"):
@@ -118,16 +117,15 @@ async def fight_timeout_task(client: Client, chat_id: int, current_round: int, r
             caption = (
                 f"<blockquote>⏰ <u><b>ROUND {current_round} TIMEOUT!</b></u></blockquote>\n\n"
                 f"<blockquote>❌ <b>Nobody solved it! Answer was :</b> <code>{word.upper()}</code>\n"
-                f"🔄 <i>Next round starting in 3 seconds...</i></blockquote>"
+                f"🔄 <i>Next round starting in 2 seconds...</i></blockquote>"
             )
             t_msg = await send_jumble_rich(client, chat_id, caption)
             if s.get("auto_delete") and t_msg:
-                asyncio.create_task(delete_after(t_msg, 4))
+                asyncio.create_task(delete_after(t_msg, 3))
         except Exception:
             pass
 
-    # Timeout hone par 3 seconds ka cool-down taaki double-spawn na ho
-    await asyncio.sleep(3)
+    await asyncio.sleep(2)
     await fight_next(client, chat_id)
 
 
@@ -154,7 +152,6 @@ async def fight_next(client: Client, chat_id: int):
         game["round_token"] = token
         game["word"] = word
         game["is_solved"] = False
-        game["is_advancing"] = False
         game["expires"] = time.time() + game["timer"]
         game["round_hints"] = defaultdict(lambda: {"count": 0, "indices": []})
 
@@ -227,7 +224,6 @@ async def resume_group_game_loop(client: Client, chat_id: int):
         )
         try:
             r_msg = await send_jumble_rich(client, chat_id, resume_caption)
-            # Auto delete resume notice
             if r_msg:
                 asyncio.create_task(delete_after(r_msg, 4))
         except Exception:
@@ -363,15 +359,12 @@ async def resolve_group_target_user(client: Client, message: Message):
     if not target_user:
         return None, "❌ Target player mention ya reply karke tag karein!"
 
-    # 1. Khud se fight nahi ho sakti
     if target_user.id == message.from_user.id:
         return None, "❌ Aap khud ke sath fight/bet nahi laga sakte!"
 
-    # 2. Bot ke sath fight nahi ho sakti
     if target_user.is_bot:
         return None, "❌ Bot ke sath fight/bet allowed nahi hai!"
 
-    # 3. User is group me hona chahiye
     try:
         chat_member = await client.get_chat_member(message.chat.id, target_user.id)
         if chat_member.status in (enums.ChatMemberStatus.BANNED, enums.ChatMemberStatus.LEFT):
@@ -479,18 +472,18 @@ async def fight_chat_answer_listener(client: Client, message: Message):
 
     async with LOCK:
         game = ACTIVE_FIGHTS.get(chat_id)
-        if not game or game.get("is_solved") or game.get("is_advancing"):
+        if not game or game.get("is_solved"):
             return
 
         user_id = message.from_user.id
         if user_id not in game["players"]:
             return
 
+        # Agar word match hota hai, tabhi round solve hoga
         if message.text.strip().lower() == game["word"].strip().lower():
-            # Turant state update & timer cancellation
             game["is_solved"] = True
-            game["is_advancing"] = True
 
+            # Purana timer task foran cancel karo
             if game.get("timer_task") and not game["timer_task"].done():
                 game["timer_task"].cancel()
 
@@ -511,9 +504,9 @@ async def fight_chat_answer_listener(client: Client, message: Message):
             if s.get("auto_delete") and win_msg:
                 asyncio.create_task(delete_after(win_msg, 3))
 
-    # Correct answer aane par haal ki haal 1 second me agla round
-    await asyncio.sleep(1)
-    await fight_next(client, chat_id)
+            # Sahi jawab milte hi 1 second me agla round aayega
+            await asyncio.sleep(1)
+            asyncio.create_task(fight_next(client, chat_id))
 
 
 # ============================================================
@@ -606,7 +599,6 @@ async def fight_callbacks_router(client: Client, query: CallbackQuery):
         if p1_bal < req_amt or p2_bal < req_amt:
             return await query.answer("Kisi ek player ke paas sufficient stars nahi hain!", show_alert=True)
 
-        # Stars deduct on accept
         deduct_user_stars(rebet["original_winner"], req_amt)
         deduct_user_stars(rebet["original_loser"], req_amt)
 
@@ -623,7 +615,6 @@ async def fight_callbacks_router(client: Client, query: CallbackQuery):
             "round": 0,
             "round_token": 0,
             "is_solved": False,
-            "is_advancing": False,
             "timer_task": None,
             "total_rounds": 10,
             "scores": defaultdict(int),
@@ -663,7 +654,6 @@ async def fight_callbacks_router(client: Client, query: CallbackQuery):
         if user_id != lobby["p2"]:
             return await query.answer("Sirf challenged player accept kar sakta hai!", show_alert=True)
 
-        # Bet balance verification and instant deduction
         if lobby["is_bet"]:
             amt = lobby["bet_amount"]
             b1 = get_user_balance(lobby["p1"])
@@ -687,7 +677,6 @@ async def fight_callbacks_router(client: Client, query: CallbackQuery):
             "round": 0,
             "round_token": 0,
             "is_solved": False,
-            "is_advancing": False,
             "timer_task": None,
             "total_rounds": lobby["total_rounds"],
             "scores": defaultdict(int),
