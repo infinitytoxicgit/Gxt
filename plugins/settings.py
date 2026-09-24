@@ -16,22 +16,21 @@ def build_settings_card(chat_id: int, chat_title: str):
     med_t = s.get("medium", 300)
     hard_t = s.get("hard", 600)
 
-    # Status indicators
-    st_text = "🟢 Active (Running)" if is_active else "🔴 Inactive (Stopped)"
+    st_text = "🟢 Running" if is_active else "🔴 Stopped"
     del_text = "🟢 Enabled" if auto_del else "🔴 Disabled"
 
+    # Regular Blue Blockquote (No expandable arrow)
     caption = (
-        f"<blockquote>⚙️ <b>𝐉ᴜᴍʙʟᴇ 𝐆ʀᴏᴜᴘ 𝐒ᴇᴛᴛɪɴɢs</b>\n\n"
+        f"<blockquote>⚙️ <u><b>𝐉ᴜᴍʙʟᴇ 𝐆ʀᴏᴜᴘ 𝐒ᴇᴛᴛɪɴɢs</b></u>\n\n"
         f"👥 <b>Group :</b> <code>{chat_title}</code>\n"
         f"🆔 <b>Chat ID :</b> <code>{chat_id}</code>\n\n"
         f"⚡ <b>Game Status :</b> {st_text}\n"
         f"🗑️ <b>Auto Delete :</b> {del_text}\n"
         f"🎯 <b>Default Mode :</b> <code>{cur_diff.title()}</code>\n"
         f"⏱️ <b>Round Timers :</b> Easy: <code>{easy_t}s</code> | Med: <code>{med_t}s</code> | Hard: <code>{hard_t}s</code></blockquote>\n\n"
-        f"<blockquote><i>Click buttons to toggle settings:</i></blockquote>"
+        f"<blockquote><i>Click buttons below to switch options live:</i></blockquote>"
     )
 
-    # Dynamic Green (Active/ON) and Red (Inactive/OFF)
     state_btn_style = enums.ButtonStyle.SUCCESS if is_active else enums.ButtonStyle.DANGER
     state_btn_label = "🟢 Game: Running" if is_active else "🔴 Game: Stopped"
 
@@ -70,7 +69,7 @@ def build_settings_card(chat_id: int, chat_title: str):
         ],
         [
             types.RichMessageButton(
-                text="⏱️ Configure Timers",
+                text="⏱️ Choose Timers",
                 style=enums.ButtonStyle.PRIMARY,
                 callback_data=f"set_menu_timers|{chat_id}",
             ),
@@ -91,9 +90,9 @@ def build_timers_card(chat_id: int):
     cur_val = s.get(cur_diff, 120)
 
     caption = (
-        f"<blockquote>⏱️ <b>Configure {cur_diff.title()} Timers</b>\n\n"
-        f"Select round time limit for <code>{cur_diff.upper()}</code> mode:\n"
-        f"Selected: <b>{cur_val}s</b> (Green is active)</blockquote>"
+        f"<blockquote>⏱️ <u><b>Choose {cur_diff.title()} Timers</b></u>\n\n"
+        f"Current Duration: <b>{cur_val}s</b>\n"
+        f"Active timer is highlighted in Green:</blockquote>"
     )
 
     options = [30, 45, 60, 120, 300, 600]
@@ -116,25 +115,23 @@ def build_timers_card(chat_id: int):
     return caption, buttons
 
 
-# Command: /settings
 @Client.on_message(filters.command(["settings", "setting", "jumblesettings"]))
 async def settings_cmd(client: Client, message: Message):
     if not await is_admin_or_owner(message.chat, message.from_user.id):
-        return await message.reply_text("❌ Sirf group admins hi settings access kar sakte hain.")
+        return await message.reply_text("❌ Sirf Group Admins settings access kar sakte hain.")
 
     chat_id = message.chat.id
     caption, buttons = build_settings_card(chat_id, message.chat.title or "Group")
     await send_jumble_rich(client, chat_id, caption, buttons)
 
 
-# Settings Callbacks
 @Client.on_callback_query(filters.regex(r"^set_"))
 async def settings_callback_router(client: Client, query: CallbackQuery):
     user_id = query.from_user.id
     chat_id = query.message.chat.id
 
     if not await is_admin_or_owner(query.message.chat, user_id):
-        return await query.answer("❌ Sirf group admins settings change kar sakte hain!", show_alert=True)
+        return await query.answer("❌ Sirf group admins hi click kar sakte hain!", show_alert=True)
 
     data = query.data.split("|")
     action = data[0]
@@ -144,20 +141,20 @@ async def settings_callback_router(client: Client, query: CallbackQuery):
         new_val = 0 if s.get("is_active", 1) else 1
         DB.execute("UPDATE settings SET is_active=? WHERE chat_id=?", (new_val, chat_id))
         DB.commit()
-        await query.answer(f"Game Status: {'Running' if new_val else 'Stopped'}")
+        await query.answer(f"Game set to: {'Running' if new_val else 'Stopped'}")
 
     elif action == "set_toggle_autodel":
         s = dict(get_settings(chat_id))
         new_val = 0 if s.get("auto_delete", 0) else 1
         DB.execute("UPDATE settings SET auto_delete=? WHERE chat_id=?", (new_val, chat_id))
         DB.commit()
-        await query.answer(f"Auto-Delete: {'Enabled' if new_val else 'Disabled'}")
+        await query.answer(f"Auto-Delete: {'ON' if new_val else 'OFF'}")
 
     elif action == "set_diff":
         diff = data[1]
         DB.execute("UPDATE settings SET default_diff=? WHERE chat_id=?", (diff, chat_id))
         DB.commit()
-        await query.answer(f"Mode set to {diff.upper()}")
+        await query.answer(f"Mode: {diff.upper()}")
 
     elif action == "set_menu_timers":
         caption, buttons = build_timers_card(chat_id)
@@ -171,7 +168,7 @@ async def settings_callback_router(client: Client, query: CallbackQuery):
         secs = int(data[2])
         DB.execute(f"UPDATE settings SET {diff}=? WHERE chat_id=?", (secs, chat_id))
         DB.commit()
-        await query.answer(f"Timer set to {secs}s!")
+        await query.answer(f"{diff.upper()} Timer: {secs}s")
         caption, buttons = build_timers_card(chat_id)
         blocks = html_to_rich_blocks(caption)
         for r in buttons:
@@ -180,9 +177,8 @@ async def settings_callback_router(client: Client, query: CallbackQuery):
 
     elif action == "set_close_panel":
         await query.message.delete()
-        return await query.answer("Settings closed.")
+        return await query.answer("Closed!")
 
-    # Redraw Main Settings Page
     caption, buttons = build_settings_card(chat_id, query.message.chat.title or "Group")
     blocks = html_to_rich_blocks(caption)
     for r in buttons:
