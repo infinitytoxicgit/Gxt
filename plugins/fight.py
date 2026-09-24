@@ -10,7 +10,7 @@ from image_gen import make_puzzle_image
 from plugins.game_core import ACTIVE_FIGHTS, start_game
 from pyrogram import Client, filters, enums, types
 from pyrogram.types import Message, CallbackQuery
-from utils.rich import send_jumble_rich, edit_jumble_rich, html_to_rich_blocks
+from utils.rich import send_jumble_rich, edit_jumble_rich
 from word_bank import WORDS, jumble_word
 
 FIGHT_LOBBY = {}
@@ -83,17 +83,17 @@ async def fight_timeout_task(client: Client, chat_id: int, round_num: int, timer
                 caption = (
                     f"<blockquote>⏰ <u><b>ROUND {round_num} TIMEOUT!</b></u></blockquote>\n\n"
                     f"<blockquote>❌ <b>Answer was :</b> <code>{word.upper()}</code>\n"
-                    f"🔄 <i>Next round starting in 2 seconds...</i></blockquote>"
+                    f"🔄 <i>Next round starting in 1 second...</i></blockquote>"
                 )
                 t_msg = await send_jumble_rich(client, chat_id, caption)
                 if s.get("auto_delete") and t_msg:
-                    asyncio.create_task(delete_after(t_msg, 4))
+                    asyncio.create_task(delete_after(t_msg, 3))
             except Exception:
                 pass
             should_advance = True
 
     if should_advance:
-        await asyncio.sleep(2)
+        await asyncio.sleep(1)
         asyncio.create_task(fight_next(client, chat_id))
 
 
@@ -171,8 +171,26 @@ async def fight_next(client: Client, chat_id: int):
     game["task"] = asyncio.create_task(fight_timeout_task(client, chat_id, game["round"], game["timer"]))
 
 
+async def resume_group_game_loop(client: Client, chat_id: int):
+    ACTIVE_FIGHTS.pop(chat_id, None)
+    await asyncio.sleep(2)
+
+    raw_s = get_settings(chat_id)
+    s = dict(raw_s) if raw_s else {}
+
+    # Sirf us group ki saved settings check hogi
+    if s.get("is_active", 1):
+        diff = s.get("default_diff") or "medium"
+        try:
+            DB.execute("DELETE FROM games WHERE chat_id=?", (chat_id,))
+            DB.commit()
+            asyncio.create_task(start_game(client, chat_id, diff, chat_id))
+        except Exception as e:
+            print(f"[Auto-Loop Resume Error in {chat_id}]: {e}")
+
+
 async def finish_fight(client: Client, chat_id: int):
-    game = ACTIVE_FIGHTS.pop(chat_id, None)
+    game = ACTIVE_FIGHTS.get(chat_id)
     if not game:
         return
 
@@ -269,19 +287,15 @@ async def finish_fight(client: Client, chat_id: int):
             result_caption = f"<blockquote>🤝 <b>BET DRAW! Refunded {bet_amt} points each.</b></blockquote>"
 
     await send_jumble_rich(client, chat_id, result_caption, end_buttons)
-    await asyncio.sleep(3)
-    if s.get("is_active", 1):
-        asyncio.create_task(start_game(client, chat_id, s.get("default_diff", "medium"), chat_id))
+    asyncio.create_task(resume_group_game_loop(client, chat_id))
 
 
 # ============================================================
 # COMMANDS & INVITATION ROUTER
 # ============================================================
 
-@Client.on_message(filters.command(["jumblefight", "fight"]))
+@Client.on_message(filters.command(["jumblefight", "fight"]) & filters.group, group=0)
 async def jumble_fight_cmd(client: Client, message: Message):
-    if not is_group(message):
-        return await message.reply_text("Group only command.")
     target_user = None
     if message.reply_to_message and message.reply_to_message.from_user:
         target_user = message.reply_to_message.from_user
@@ -323,10 +337,8 @@ async def jumble_fight_cmd(client: Client, message: Message):
     await send_jumble_rich(client, message.chat.id, caption, buttons)
 
 
-@Client.on_message(filters.command(["jumblebetfight", "betfight"]))
+@Client.on_message(filters.command(["jumblebetfight", "betfight"]) & filters.group, group=0)
 async def bet_fight_cmd(client: Client, message: Message):
-    if not is_group(message):
-        return await message.reply_text("Group only command.")
     parts = message.command[1:]
     target_user = None
     if message.reply_to_message and message.reply_to_message.from_user:
@@ -414,12 +426,12 @@ async def fight_chat_answer_listener(client: Client, message: Message):
             f"<blockquote>🎯 <b>ROUND {game['round']} SOLVED!</b>\n\n"
             f"👤 <b>Point Scorer :</b> {game['mentions'][user_id]}\n"
             f"✅ <b>Word was :</b> <code>{game['word'].upper()}</code>\n"
-            f"🔄 <i>Next round in 2 seconds...</i></blockquote>"
+            f"🔄 <i>Next round in 1 second...</i></blockquote>"
         )
         if s.get("auto_delete") and win_msg:
-            asyncio.create_task(delete_after(win_msg, 4))
+            asyncio.create_task(delete_after(win_msg, 3))
 
-        await asyncio.sleep(2)
+        await asyncio.sleep(1)
         asyncio.create_task(fight_next(client, chat_id))
 
 
@@ -540,7 +552,6 @@ async def fight_callbacks_router(client: Client, query: CallbackQuery):
         await query.message.delete()
         return await query.answer("Challenge declined.")
 
-    # Configurations: Challenger ya Opponent adjust kar sakte hain
     if user_id not in (lobby["p1"], lobby["p2"]):
         return await query.answer("Sirf duelists settings adjust kar sakte hain!", show_alert=True)
 
