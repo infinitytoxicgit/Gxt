@@ -12,7 +12,6 @@ def get_words_for_diff(difficulty: str):
     builtin = WORDS.get(difficulty, [])
     rows = DB.execute("SELECT word FROM custom_words WHERE difficulty=?", (difficulty,)).fetchall()
     custom = [r["word"] for r in rows]
-    # Unique combined list
     combined = sorted(list(set(builtin + custom)))
     return combined
 
@@ -33,8 +32,8 @@ def build_words_page(difficulty: str, page: int = 1):
 
     caption = (
         f"<blockquote>📚 <u><b>{difficulty.upper()} WORDS BANK (Page {page}/{total_pages})</b></u>\n\n"
-        f"Total Words in Database : <b>{total_words}</b>\n\n"
-        f"{words_body}</blockquote>\n\n"
+        f"Total Words in Database : <b>{total_words}</b></blockquote>\n\n"
+        f"<blockquote>{words_body}</blockquote>\n\n"
         f"<blockquote>Use <code>/addword {difficulty} [word]</code> or <code>/delword {difficulty} [word]</code></blockquote>"
     )
 
@@ -50,9 +49,9 @@ def build_words_page(difficulty: str, page: int = 1):
     buttons = [
         nav_row,
         [
-            types.RichMessageButton(text="🟢 Easy", style=enums.ButtonStyle.SUCCESS if difficulty == "easy" else enums.ButtonStyle.DANGER, callback_data="wpage|easy|1"),
-            types.RichMessageButton(text="🟡 Medium", style=enums.ButtonStyle.SUCCESS if difficulty == "medium" else enums.ButtonStyle.DANGER, callback_data="wpage|medium|1"),
-            types.RichMessageButton(text="🔴 Hard", style=enums.ButtonStyle.SUCCESS if difficulty == "hard" else enums.ButtonStyle.DANGER, callback_data="wpage|hard|1"),
+            types.RichMessageButton(text="🟢 Easy" if difficulty == "easy" else "🔴 Easy", style=enums.ButtonStyle.SUCCESS if difficulty == "easy" else enums.ButtonStyle.DANGER, callback_data="wpage|easy|1"),
+            types.RichMessageButton(text="🟢 Medium" if difficulty == "medium" else "🔴 Medium", style=enums.ButtonStyle.SUCCESS if difficulty == "medium" else enums.ButtonStyle.DANGER, callback_data="wpage|medium|1"),
+            types.RichMessageButton(text="🟢 Hard" if difficulty == "hard" else "🔴 Hard", style=enums.ButtonStyle.SUCCESS if difficulty == "hard" else enums.ButtonStyle.DANGER, callback_data="wpage|hard|1"),
         ],
         [
             types.RichMessageButton(text="❌ Close Panel", style=enums.ButtonStyle.DANGER, callback_data="wpage_close")
@@ -61,7 +60,6 @@ def build_words_page(difficulty: str, page: int = 1):
     return caption, buttons
 
 
-# Command: /word or /words
 @Client.on_message(filters.command(["word", "words", "wordbank"]))
 async def words_panel_cmd(client: Client, message: Message):
     if not await is_admin_or_owner(message.chat, message.from_user.id):
@@ -84,54 +82,3 @@ async def words_pagination_callback(client: Client, query: CallbackQuery):
     caption, buttons = build_words_page(diff, page)
     await query.answer()
     return await edit_jumble_rich(client, query.message.chat.id, query.message.id, caption, buttons)
-
-
-# /addword easy apple
-@Client.on_message(filters.command(["addword", "newcustomword"]))
-async def add_word_cmd(client: Client, message: Message):
-    if not await is_admin_or_owner(message.chat, message.from_user.id):
-        return await message.reply_text("❌ Only Owner/Admin can add words.")
-
-    if len(message.command) < 3:
-        return await message.reply_text("ℹ️ **Usage:** `/addword [easy/medium/hard] [word]`")
-
-    diff = message.command[1].lower()
-    word = message.command[2].strip().lower()
-
-    if diff not in ["easy", "medium", "hard"]:
-        return await message.reply_text("❌ Difficulty must be: `easy`, `medium`, or `hard`.")
-
-    if not word.isalpha():
-        return await message.reply_text("❌ Word me sirf alphabets hone chahiye.")
-
-    try:
-        DB.execute("INSERT INTO custom_words(difficulty, word) VALUES(?, ?)", (diff, word))
-        DB.commit()
-        if diff in WORDS and word not in WORDS[diff]:
-            WORDS[diff].append(word)
-        await message.reply_text(f"<blockquote>✅ Word <code>{word.upper()}</code> added to <b>{diff.upper()}</b> bank!</blockquote>", parse_mode=enums.ParseMode.HTML)
-    except Exception:
-        await message.reply_text("❌ Yeh word already database me exist karta hai.")
-
-
-# /delword easy apple
-@Client.on_message(filters.command(["delword", "removeword"]))
-async def del_word_cmd(client: Client, message: Message):
-    if not await is_admin_or_owner(message.chat, message.from_user.id):
-        return await message.reply_text("❌ Only Owner/Admin can delete words.")
-
-    if len(message.command) < 3:
-        return await message.reply_text("ℹ️ **Usage:** `/delword [easy/medium/hard] [word]`")
-
-    diff = message.command[1].lower()
-    word = message.command[2].strip().lower()
-
-    cur = DB.execute("DELETE FROM custom_words WHERE difficulty=? AND word=?", (diff, word))
-    DB.commit()
-
-    if cur.rowcount > 0:
-        if diff in WORDS and word in WORDS[diff]:
-            WORDS[diff].remove(word)
-        await message.reply_text(f"<blockquote>🗑️ Word <code>{word.upper()}</code> removed from database!</blockquote>", parse_mode=enums.ParseMode.HTML)
-    else:
-        await message.reply_text("❌ Yeh word custom words list me nahi mila.")
