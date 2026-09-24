@@ -70,7 +70,6 @@ def rich_game_buttons(puzzle_id: int):
 
 
 async def start_game(client: Client, chat_id: int, difficulty: str, message_or_chat):
-    # Match running hone par regular puzzle start nahi hoga
     if chat_id in ACTIVE_FIGHTS:
         return
 
@@ -83,6 +82,7 @@ async def start_game(client: Client, chat_id: int, difficulty: str, message_or_c
     if old_game and settings.get("auto_delete") and old_game["message_id"]:
         await safe_delete_and_unpin(client, chat_id, old_game["message_id"])
 
+    # Clear old active puzzle row cleanly
     DB.execute("DELETE FROM games WHERE chat_id=?", (chat_id,))
 
     word = choose_word(chat_id, difficulty)
@@ -96,8 +96,8 @@ async def start_game(client: Client, chat_id: int, difficulty: str, message_or_c
     expires = now + timer_val
 
     DB.execute("""
-        INSERT INTO games(chat_id, difficulty, word, puzzle_id, started, expires, message_id)
-        VALUES (?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO games(chat_id, difficulty, word, puzzle_id, started, expires, message_id, solved)
+        VALUES (?, ?, ?, ?, ?, ?, ?, 0)
     """, (chat_id, difficulty, word, puzzle_id, now, expires, 0))
     DB.commit()
 
@@ -139,7 +139,6 @@ async def start_game(client: Client, chat_id: int, difficulty: str, message_or_c
         )
         DB.execute("UPDATE games SET message_id=? WHERE chat_id=?", (sent.id, chat_id))
         DB.commit()
-        # Pin silently and instantly clean service notifications
         await safe_pin_and_clean(client, chat_id, sent.id)
     except Exception as e:
         print(f"Error sending rich puzzle: {e}")
@@ -148,9 +147,9 @@ async def start_game(client: Client, chat_id: int, difficulty: str, message_or_c
 
 
 async def expire_game(client: Client, chat_id: int, puzzle_id: int, expires: float):
-    await asyncio.sleep(max(0, expires - time.time()))
+    wait_time = max(0, expires - time.time())
+    await asyncio.sleep(wait_time)
 
-    # Duel chalu hone par regular task exit karega
     if chat_id in ACTIVE_FIGHTS:
         return
 
@@ -158,10 +157,7 @@ async def expire_game(client: Client, chat_id: int, puzzle_id: int, expires: flo
     if not row or row["solved"]:
         return
 
-    if chat_id in ACTIVE_FIGHTS:
-        return
-
-    DB.execute("UPDATE games SET solved=1 WHERE chat_id=?", (chat_id,))
+    DB.execute("UPDATE games SET solved=1 WHERE chat_id=? AND puzzle_id=?", (chat_id, puzzle_id))
     DB.commit()
 
     raw_s = get_settings(chat_id)
@@ -188,120 +184,9 @@ async def expire_game(client: Client, chat_id: int, puzzle_id: int, expires: flo
 
     await asyncio.sleep(1)
 
-    # Naya regular puzzle aane se pehle strict check
     if chat_id not in ACTIVE_FIGHTS:
         s = dict(get_settings(chat_id)) if get_settings(chat_id) else {}
         if s.get("is_active", 1):
-            next_diff = s.get("default_diff") or "medium"
-            asyncio.create_task(start_game(client, chat_id, next_diff, chat_id))
-
-
-# ============================================================
-# SOLVE DETECTOR (Normal Games Only)
-# ============================================================
-
-EXCLUDED_COMMANDS = [
-    "settings", "setting", "jumblesettings", "stats", "stat", 
-    "mystats", "leaderboard", "lb", "top", "shop", "powershop", 
-    "fight", "jumblefight", "betfight", "jumblebetfight", 
-    "word", "words", "puzzle", "current", "bonus", "daily", "setdaily", "setbonus"
-]
-
-@Client.on_message(filters.text & filters.group & ~filters.command(EXCLUDED_COMMANDS), group=2)
-async def check_answer_handler(client: Client, message: Message):
-    if not message.text or message.text.startswith("/"):
-        return
-
-    chat_id = message.chat.id
-
-    # Agar group me duel chal raha hai toh ye listener answer check nahi karega
-    if chat_id in ACTIVE_FIGHTS:
-        return
-
-    game = DB.execute("SELECT * FROM games WHERE chat_id=? AND solved=0", (chat_id,)).fetchone()
-    if not game:
-        return
-
-    user_ans = message.text.strip().lower()
-    correct_word = game["word"].strip().lower()
-
-    if user_ans == correct_word:
-        DB.execute("UPDATE games SET solved=1 WHERE chat_id=?", (chat_id,))
-        DB.commit()
-
-        user = message.from_user
-        ensure_user(user)
-
-        diff = game["difficulty"]
-        base_pts = int(get_global_config(f"points_{diff}", 10))
-        base_exp = int(get_global_config(f"exp_{diff}", 15))
-
-        now = time.time()
-        active_powers = DB.execute(
-            "SELECT power_type FROM user_powers WHERE user_id=? AND expires_at > ?",
-            (user.id, now)
-        ).fetchall()
-        power_types = [p["power_type"] for p in active_powers]
-
-        has_2x_stars = "2x_stars" in power_types
-        has_2x_exp = "2x_exp" in power_types
-
-        reward_pts = base_pts * 2 if has_2x_stars else base_pts
-        reward_exp = base_exp * 2 if has_2x_exp else base_exp
-
-        diff_col = f"{diff}_solved"
-        DB.execute(f"""
-            UPDATE users SET 
-                solved = solved + 1,
-                {diff_col} = {diff_col} + 1,
-                points = points + ?,
-                stars = stars + ?,
-                exp = exp + ?,
-                streak = streak + 1,
-                best_streak = MAX(best_streak, streak + 1)
-            WHERE user_id = ?
-        """, (reward_pts, reward_pts, reward_exp, user.id))
-
-        DB.execute(
-            "INSERT INTO solve_history (user_id, chat_id, points, timestamp) VALUES (?, ?, ?, ?)",
-            (user.id, chat_id, reward_pts, now)
-        )
-        DB.commit()
-
-        booster_badge = ""
-        if has_2x_stars or has_2x_exp:
-            badges = []
-            if has_2x_stars:
-                badges.append("⭐ 2x Stars")
-            if has_2x_exp:
-                badges.append("⚡ 2x EXP")
-            booster_badge = f"\n🔥 <b>Active Boosters :</b> {' | '.join(badges)}"
-
-        win_caption = (
-            f"<blockquote>🎉 <u><b>PUZZLE SOLVED!</b></u></blockquote>\n\n"
-            f"<blockquote>👤 <b>Solver :</b> {user.mention}\n"
-            f"✅ <b>Word :</b> <code>{correct_word.upper()}</code>\n"
-            f"⭐ <b>Stars Earned :</b> <code>+{reward_pts}</code>\n"
-            f"⚡ <b>EXP Gained :</b> <code>+{reward_exp}</code>"
-            f"{booster_badge}\n\n"
-            f"🔄 <i>Next puzzle starting in 1 second...</i></blockquote>"
-        )
-
-        raw_s = get_settings(chat_id)
-        s = dict(raw_s) if raw_s else {}
-        if s.get("auto_delete") and game["message_id"]:
-            await safe_delete_and_unpin(client, chat_id, game["message_id"])
-
-        win_blocks = html_to_rich_blocks(win_caption)
-        win_msg = await client.send_rich_message(
-            chat_id=chat_id,
-            rich_message=types.InputRichMessage(blocks=win_blocks)
-        )
-        if s.get("auto_delete") and win_msg:
-            asyncio.create_task(delete_after(win_msg, 4))
-
-        await asyncio.sleep(1)
-        if chat_id not in ACTIVE_FIGHTS and s.get("is_active", 1):
             next_diff = s.get("default_diff") or "medium"
             asyncio.create_task(start_game(client, chat_id, next_diff, chat_id))
 
@@ -347,7 +232,7 @@ async def puzzle_buttons_listener(client: Client, query: CallbackQuery):
         ensure_user(query.from_user)
         game = DB.execute("SELECT * FROM games WHERE chat_id=? AND solved=0", (chat_id,)).fetchone()
         if not game:
-            return await query.answer("❌ Active puzzle nahi mila!", show_alert=True)
+            return await query.answer("❌ Yeh puzzle expire ya solve ho chuka hai!", show_alert=True)
 
         puzzle_id = game["puzzle_id"]
         word = game["word"]
@@ -389,7 +274,10 @@ async def puzzle_buttons_listener(client: Client, query: CallbackQuery):
 
         game = DB.execute("SELECT * FROM games WHERE chat_id=? AND solved=0", (chat_id,)).fetchone()
         if not game:
-            return await query.answer("❌ Koi active puzzle nahi hai!", show_alert=True)
+            await query.answer("🔄 Spawning new puzzle...")
+            s = dict(get_settings(chat_id)) if get_settings(chat_id) else {}
+            next_diff = s.get("default_diff") or "medium"
+            return asyncio.create_task(start_game(client, chat_id, next_diff, chat_id))
 
         DB.execute("UPDATE games SET solved=1 WHERE chat_id=?", (chat_id,))
         DB.commit()
