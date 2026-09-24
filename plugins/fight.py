@@ -69,106 +69,111 @@ def build_fight_lobby_card(lobby_data):
     return caption, buttons
 
 
-async def fight_timeout_task(client: Client, chat_id: int, round_num: int, timer_duration: int):
+async def fight_timeout_task(client: Client, chat_id: int, current_round: int, round_token: int, timer_duration: int):
     await asyncio.sleep(timer_duration)
-    should_advance = False
+
     async with LOCK:
         game = ACTIVE_FIGHTS.get(chat_id)
-        if game and game["round"] == round_num:
-            word = game["word"]
-            s = dict(get_settings(chat_id)) if get_settings(chat_id) else {}
-            if s.get("auto_delete") and game.get("msg_id"):
-                await safe_delete_and_unpin(client, chat_id, game["msg_id"])
-            try:
-                caption = (
-                    f"<blockquote>⏰ <u><b>ROUND {round_num} TIMEOUT!</b></u></blockquote>\n\n"
-                    f"<blockquote>❌ <b>Answer was :</b> <code>{word.upper()}</code>\n"
-                    f"🔄 <i>Next round starting in 1 second...</i></blockquote>"
-                )
-                t_msg = await send_jumble_rich(client, chat_id, caption)
-                if s.get("auto_delete") and t_msg:
-                    asyncio.create_task(delete_after(t_msg, 3))
-            except Exception:
-                pass
-            should_advance = True
+        # Strict validation: Only execute if round hasn't progressed or been solved
+        if not game or game.get("round") != current_round or game.get("round_token") != round_token or game.get("is_solved", False):
+            return
 
-    if should_advance:
-        await asyncio.sleep(1)
-        asyncio.create_task(fight_next(client, chat_id))
+        game["is_solved"] = True
+        word = game["word"]
+        s = dict(get_settings(chat_id)) if get_settings(chat_id) else {}
+        if s.get("auto_delete") and game.get("msg_id"):
+            await safe_delete_and_unpin(client, chat_id, game["msg_id"])
+
+        try:
+            caption = (
+                f"<blockquote>⏰ <u><b>ROUND {current_round} TIMEOUT!</b></u></blockquote>\n\n"
+                f"<blockquote>❌ <b>Nobody solved it! Answer was :</b> <code>{word.upper()}</code>\n"
+                f"🔄 <i>Next round starting in 2 seconds...</i></blockquote>"
+            )
+            t_msg = await send_jumble_rich(client, chat_id, caption)
+            if s.get("auto_delete") and t_msg:
+                asyncio.create_task(delete_after(t_msg, 3))
+        except Exception:
+            pass
+
+    await asyncio.sleep(2)
+    asyncio.create_task(fight_next(client, chat_id))
 
 
 async def fight_next(client: Client, chat_id: int):
-    game = ACTIVE_FIGHTS.get(chat_id)
-    if not game:
-        return
+    async with LOCK:
+        game = ACTIVE_FIGHTS.get(chat_id)
+        if not game:
+            return
 
-    curr = asyncio.current_task()
-    if game.get("task") and game["task"] is not curr and not game["task"].done():
-        try:
-            game["task"].cancel()
-        except Exception:
-            pass
+        game["round"] += 1
+        total_r = game.get("total_rounds", 10)
+        if game["round"] > total_r:
+            asyncio.create_task(finish_fight(client, chat_id))
+            return
 
-    game["round"] += 1
-    total_r = game.get("total_rounds", 10)
-    if game["round"] > total_r:
-        await finish_fight(client, chat_id)
-        return
+        diff = game["difficulty"]
+        word = random.choice(WORDS[diff])
+        jumbled = jumble_word(word)
 
-    diff = game["difficulty"]
-    word = random.choice(WORDS[diff])
-    jumbled = jumble_word(word)
+        # Unique token for this exact round to kill duplicate race triggers
+        token = random.randint(100000, 999999)
+        game["round_token"] = token
+        game["word"] = word
+        game["is_solved"] = False
+        game["expires"] = time.time() + game["timer"]
+        game["round_hints"] = defaultdict(lambda: {"count": 0, "indices": []})
 
-    game["word"] = word
-    game["expires"] = time.time() + game["timer"]
-    game["round_hints"] = defaultdict(lambda: {"count": 0, "indices": []})
+        round_num = game["round"]
+        timer_val = game["timer"]
 
-    fight_tag = "BET FIGHT" if game.get("is_bet") else "FIGHT"
-    image_path = make_puzzle_image(jumbled, f"{fight_tag} {diff.upper()}", game["round"])
+        fight_tag = "BET FIGHT" if game.get("is_bet") else "FIGHT"
+        image_path = make_puzzle_image(jumbled, f"{fight_tag} {diff.upper()}", round_num)
 
-    header_icon = "💰" if game.get("is_bet") else "⚔️"
-    header_name = "𝐉𝐔𝐌𝐁𝐋𝐄 𝐁𝐄𝐓 𝐅𝐈𝐆𝐇𝐓" if game.get("is_bet") else "𝐉𝐔𝐌𝐁𝐋𝐄 𝐅𝐈𝐆𝐇𝐓"
-    extra_info = f"\n💵 <b>Stake Pot:</b> <code>{game.get('bet_amount')} pts</code>" if game.get("is_bet") else ""
-    hint_limit = int(get_global_config(f"hints_{diff}", 3))
+        header_icon = "💰" if game.get("is_bet") else "⚔️"
+        header_name = "𝐉𝐔𝐌𝐁𝐋𝐄 𝐁𝐄𝐓 𝐅𝐈𝐆𝐇𝐓" if game.get("is_bet") else "𝐉𝐔𝐌𝐁𝐋𝐄 𝐅𝐈𝐆𝐇𝐓"
+        extra_info = f"\n💵 <b>Stake Pot:</b> <code>{game.get('bet_amount')} pts</code>" if game.get("is_bet") else ""
+        hint_limit = int(get_global_config(f"hints_{diff}", 3))
 
-    p1, p2 = game["players"]
-    score_board = f"📊 <b>Score :</b> {game['mentions'][p1]} (<code>{game['scores'][p1]}</code>) vs {game['mentions'][p2]} (<code>{game['scores'][p2]}</code>)"
+        p1, p2 = game["players"]
+        score_board = f"📊 <b>Score :</b> {game['mentions'][p1]} (<code>{game['scores'][p1]}</code>) vs {game['mentions'][p2]} (<code>{game['scores'][p2]}</code>)"
 
-    caption = (
-        f"<blockquote>{header_icon} <u><b>{header_name} — ROUND {game['round']}/{total_r}</b></u></blockquote>\n\n"
-        f"<blockquote>🎯 <b>Difficulty :</b> <code>{diff.title()}</code> | ⏱️ <b>Time :</b> <code>{game['timer']}s</code>{extra_info}\n"
-        f"💡 <b>Equal Hints :</b> <code>{hint_limit}/player</code>\n"
-        f"{score_board}</blockquote>\n\n"
-        "<blockquote>🔀 <i>Unscramble letters and send in chat to score!</i></blockquote>"
-    )
-
-    buttons = [
-        [
-            types.RichMessageButton(
-                text="💡 𝐇ɪɴᴛ",
-                style=enums.ButtonStyle.PRIMARY,
-                callback_data="fight_hint",
-            )
-        ]
-    ]
-
-    try:
-        sent = await send_jumble_rich(
-            client,
-            chat_id,
-            caption,
-            buttons,
-            photo=image_path if (image_path and os.path.isfile(str(image_path))) else None
+        caption = (
+            f"<blockquote>{header_icon} <u><b>{header_name} — ROUND {round_num}/{total_r}</b></u></blockquote>\n\n"
+            f"<blockquote>🎯 <b>Difficulty :</b> <code>{diff.title()}</code> | ⏱️ <b>Time :</b> <code>{timer_val}s</code>{extra_info}\n"
+            f"💡 <b>Equal Hints :</b> <code>{hint_limit}/player</code>\n"
+            f"{score_board}</blockquote>\n\n"
+            "<blockquote>🔀 <i>Unscramble letters and send in chat to score!</i></blockquote>"
         )
-        game["msg_id"] = sent.id
-        try:
-            await sent.pin(disable_notification=True)
-        except Exception:
-            pass
-    except Exception as e:
-        print(f"Fight dispatch error: {e}")
 
-    game["task"] = asyncio.create_task(fight_timeout_task(client, chat_id, game["round"], game["timer"]))
+        buttons = [
+            [
+                types.RichMessageButton(
+                    text="💡 𝐇ɪɴᴛ",
+                    style=enums.ButtonStyle.PRIMARY,
+                    callback_data="fight_hint",
+                )
+            ]
+        ]
+
+        try:
+            sent = await send_jumble_rich(
+                client,
+                chat_id,
+                caption,
+                buttons,
+                photo=image_path if (image_path and os.path.isfile(str(image_path))) else None
+            )
+            game["msg_id"] = sent.id
+            try:
+                await sent.pin(disable_notification=True)
+            except Exception:
+                pass
+        except Exception as e:
+            print(f"Fight dispatch error: {e}")
+
+        # Spawn strictly locked timeout task
+        asyncio.create_task(fight_timeout_task(client, chat_id, round_num, token, timer_val))
 
 
 async def resume_group_game_loop(client: Client, chat_id: int):
@@ -178,7 +183,6 @@ async def resume_group_game_loop(client: Client, chat_id: int):
     raw_s = get_settings(chat_id)
     s = dict(raw_s) if raw_s else {}
 
-    # Sirf us group ki saved settings trigger hongi
     if s.get("is_active", 1):
         diff = s.get("default_diff") or "medium"
         try:
@@ -190,16 +194,9 @@ async def resume_group_game_loop(client: Client, chat_id: int):
 
 
 async def finish_fight(client: Client, chat_id: int):
-    game = ACTIVE_FIGHTS.get(chat_id)
+    game = ACTIVE_FIGHTS.pop(chat_id, None)
     if not game:
         return
-
-    curr = asyncio.current_task()
-    if game.get("task") and game["task"] is not curr and not game["task"].done():
-        try:
-            game["task"].cancel()
-        except Exception:
-            pass
 
     s = dict(get_settings(chat_id)) if get_settings(chat_id) else {}
     if s.get("auto_delete") and game.get("msg_id"):
@@ -287,7 +284,6 @@ async def finish_fight(client: Client, chat_id: int):
             result_caption = f"<blockquote>🤝 <b>BET DRAW! Refunded {bet_amt} points each.</b></blockquote>"
 
     await send_jumble_rich(client, chat_id, result_caption, end_buttons)
-    # Agar rebet offer hua hai toh loser ke decision ka wait karenge, warna turant loop continue hoga
     if not (is_bet and winner and not is_rebet):
         asyncio.create_task(resume_group_game_loop(client, chat_id))
 
@@ -407,34 +403,37 @@ async def fight_chat_answer_listener(client: Client, message: Message):
     if chat_id not in ACTIVE_FIGHTS:
         return
 
-    game = ACTIVE_FIGHTS[chat_id]
-    user_id = message.from_user.id
+    async with LOCK:
+        game = ACTIVE_FIGHTS.get(chat_id)
+        if not game or game.get("is_solved", False):
+            return
 
-    if user_id not in game["players"]:
-        return
+        user_id = message.from_user.id
+        if user_id not in game["players"]:
+            return
 
-    if message.text.strip().lower() == game["word"].strip().lower():
-        if game.get("task") and not game["task"].done():
-            game["task"].cancel()
+        if message.text.strip().lower() == game["word"].strip().lower():
+            # Mark solved immediately to block timeout race triggers
+            game["is_solved"] = True
+            game["scores"][user_id] += 1
 
-        game["scores"][user_id] += 1
-        s = dict(get_settings(chat_id)) if get_settings(chat_id) else {}
-        if s.get("auto_delete") and game.get("msg_id"):
-            await safe_delete_and_unpin(client, chat_id, game["msg_id"])
+            s = dict(get_settings(chat_id)) if get_settings(chat_id) else {}
+            if s.get("auto_delete") and game.get("msg_id"):
+                await safe_delete_and_unpin(client, chat_id, game["msg_id"])
 
-        win_msg = await send_jumble_rich(
-            client,
-            chat_id,
-            f"<blockquote>🎯 <b>ROUND {game['round']} SOLVED!</b>\n\n"
-            f"👤 <b>Point Scorer :</b> {game['mentions'][user_id]}\n"
-            f"✅ <b>Word was :</b> <code>{game['word'].upper()}</code>\n"
-            f"🔄 <i>Next round in 1 second...</i></blockquote>"
-        )
-        if s.get("auto_delete") and win_msg:
-            asyncio.create_task(delete_after(win_msg, 3))
+            win_msg = await send_jumble_rich(
+                client,
+                chat_id,
+                f"<blockquote>🎯 <b>ROUND {game['round']} SOLVED!</b>\n\n"
+                f"👤 <b>Point Scorer :</b> {game['mentions'][user_id]}\n"
+                f"✅ <b>Word was :</b> <code>{game['word'].upper()}</code>\n"
+                f"🔄 <i>Next round in 2 seconds...</i></blockquote>"
+            )
+            if s.get("auto_delete") and win_msg:
+                asyncio.create_task(delete_after(win_msg, 3))
 
-        await asyncio.sleep(1)
-        asyncio.create_task(fight_next(client, chat_id))
+            await asyncio.sleep(2)
+            asyncio.create_task(fight_next(client, chat_id))
 
 
 # ============================================================
@@ -475,7 +474,7 @@ async def fight_callbacks_router(client: Client, query: CallbackQuery):
         letter = word[chosen].upper()
         return await query.answer(f"💡 Clue #{chosen + 1} is: '{letter}' ({hint_limit - user_hint['count']} hints left)", show_alert=True)
 
-    # 2. Loser triggers Comeback Challenge (Needs Winner's Acceptance)
+    # 2. Loser triggers Comeback Challenge
     if action == "rebet_challenge":
         rebet = REBET_LOBBY.get(chat_id)
         if not rebet:
@@ -529,7 +528,6 @@ async def fight_callbacks_router(client: Client, query: CallbackQuery):
         if pts < rebet["rebet_amount"]:
             return await query.answer("Aapka balance kam hai!", show_alert=True)
 
-        # Deduct stake from both
         DB.execute("UPDATE users SET points=points-?, stars=stars-? WHERE user_id=?", (rebet["rebet_amount"], rebet["rebet_amount"], rebet["original_winner"]))
         DB.execute("UPDATE users SET points=points-?, stars=stars-? WHERE user_id=?", (rebet["rebet_amount"], rebet["rebet_amount"], rebet["original_loser"]))
         DB.commit()
@@ -539,11 +537,12 @@ async def fight_callbacks_router(client: Client, query: CallbackQuery):
             "names": {rebet["original_winner"]: "Winner", rebet["original_loser"]: "Loser"},
             "mentions": {rebet["original_winner"]: rebet["winner_mention"], rebet["original_loser"]: rebet["loser_mention"]},
             "round": 0,
+            "round_token": 0,
+            "is_solved": False,
             "total_rounds": 10,
             "scores": defaultdict(int),
             "word": None,
             "expires": None,
-            "task": None,
             "difficulty": rebet["difficulty"],
             "timer": rebet["timer"],
             "msg_id": None,
@@ -590,11 +589,12 @@ async def fight_callbacks_router(client: Client, query: CallbackQuery):
             "names": {lobby["p1"]: lobby["p1_name"], lobby["p2"]: lobby["p2_name"]},
             "mentions": {lobby["p1"]: lobby["m1"], lobby["p2"]: lobby["m2"]},
             "round": 0,
+            "round_token": 0,
+            "is_solved": False,
             "total_rounds": lobby["total_rounds"],
             "scores": defaultdict(int),
             "word": None,
             "expires": None,
-            "task": None,
             "difficulty": lobby["difficulty"],
             "timer": lobby["timer"],
             "msg_id": None,
