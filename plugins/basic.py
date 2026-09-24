@@ -3,8 +3,8 @@ import time
 from datetime import datetime
 from pyrogram import Client, filters, enums, types
 from pyrogram.types import Message, CallbackQuery
-from database import DB, ensure_user, get_user, get_settings, is_admin, get_global_config
-from helpers import get_mention, is_admin_or_owner
+from database import DB, ensure_user, get_user, get_settings, is_admin, get_global_config, set_global_config
+from helpers import get_mention, is_admin_or_owner, is_authed, is_owner
 from image_gen import make_stats_graph_image, make_leaderboard_graph_image
 from utils.rich import send_jumble_rich, edit_jumble_rich, make_exp_slider_row, html_to_rich_blocks
 
@@ -30,7 +30,189 @@ async def set_private_mode(client: Client, message: Message):
 
 
 # ============================================================
-# STATS WITH EXP PROGRESS, POWER BARS & SMART GRAPH IMAGE
+# REWARDS: /daily (DM ONLY) & /bonus (GROUP ADMIN VERIFIED)
+# ============================================================
+
+@Client.on_message(filters.command(["daily"]))
+async def daily_cmd(client: Client, message: Message):
+    if message.chat.type != enums.ChatType.PRIVATE:
+        return await message.reply_text("<blockquote>ℹ️ <b>/daily</b> sirf Bot ke <b>DM (Private Chat)</b> me claim ho sakta hai!</blockquote>", parse_mode=enums.ParseMode.HTML)
+
+    user_id = message.from_user.id
+    ensure_user(message.from_user)
+    u = get_user(user_id)
+    u_dict = dict(u) if u else {}
+
+    now_ts = time.time()
+    last_daily = u_dict.get("last_daily", 0)
+
+    if last_daily and (now_ts - last_daily) < 86400:
+        rem_sec = int(86400 - (now_ts - last_daily))
+        h, m = divmod(rem_sec // 60, 60)
+        return await message.reply_text(f"<blockquote>⏳ <b>Already Claimed!</b>\nNext claim unlocks in: <code>{h}h {m}m</code></blockquote>", parse_mode=enums.ParseMode.HTML)
+
+    reward_amt = int(get_global_config("daily_bonus", 100))
+    DB.execute("""
+        UPDATE users SET 
+            stars = stars + ?, 
+            points = points + ?, 
+            daily_claims = daily_claims + 1, 
+            last_daily = ? 
+        WHERE user_id = ?
+    """, (reward_amt, reward_amt, now_ts, user_id))
+    DB.commit()
+
+    caption = (
+        "<blockquote>🎁 <u><b>DAILY REWARD CLAIMED</b></u></blockquote>\n\n"
+        f"<blockquote>🎀 <b>Reward :</b> <code>+{reward_amt} Stars / Points</code>\n"
+        f"👤 <b>Player :</b> {message.from_user.mention}\n"
+        "⚡ Next reward unlocks in 24 Hours!</blockquote>"
+    )
+    await send_jumble_rich(client, message.chat.id, caption)
+
+
+@Client.on_message(filters.command(["bonus"]))
+async def group_bonus_cmd(client: Client, message: Message):
+    if message.chat.type == enums.ChatType.PRIVATE:
+        return await message.reply_text("<blockquote>❌ <b>/bonus</b> group ke andar run karein jahan aapne bot ko admin banaya ho!</blockquote>", parse_mode=enums.ParseMode.HTML)
+
+    chat_id = message.chat.id
+    user_id = message.from_user.id
+    ensure_user(message.from_user)
+
+    # 1. Check if group bonus already claimed
+    already = DB.execute("SELECT * FROM group_bonus WHERE chat_id=?", (chat_id,)).fetchone()
+    if already:
+        return await message.reply_text("<blockquote>❌ Is group ka bonus pehle hi claim kiya ja chuka hai! Ek group ka bonus sirf 1 baar milta hai.</blockquote>", parse_mode=enums.ParseMode.HTML)
+
+    # 2. Check if bot is Admin in this group
+    try:
+        bot_member = await client.get_chat_member(chat_id, (await client.get_me()).id)
+        if bot_member.status not in (enums.ChatMemberStatus.ADMINISTRATOR, enums.ChatMemberStatus.OWNER):
+            return await message.reply_text("<blockquote>⚠️ <b>Bot Admin Nahi Hai!</b>\nPehle bot ko group me Admin banayein, fir <code>/bonus</code> claim karein.</blockquote>", parse_mode=enums.ParseMode.HTML)
+    except Exception:
+        return await message.reply_text("<blockquote>❌ Bot permissions verify nahi ho saki. Bot ko Admin rights dein.</blockquote>", parse_mode=enums.ParseMode.HTML)
+
+    bonus_amt = int(get_global_config("group_bonus_points", 200))
+
+    DB.execute("INSERT INTO group_bonus (chat_id, user_id, claimed_at) VALUES (?, ?, ?)", (chat_id, user_id, time.time()))
+    DB.execute("UPDATE users SET stars = stars + ?, points = points + ? WHERE user_id = ?", (bonus_amt, bonus_amt, user_id))
+    DB.commit()
+
+    caption = (
+        "<blockquote>🎉 <u><b>GROUP ADDITION BONUS CLAIMED!</b></u></blockquote>\n\n"
+        f"<blockquote>👤 <b>Claimer :</b> {message.from_user.mention}\n"
+        f"👥 <b>Group :</b> <code>{message.chat.title}</code>\n"
+        f"⭐ <b>Bonus Added :</b> <code>+{bonus_amt} Stars / Points</code></blockquote>\n\n"
+        "<blockquote><i>Thank you for adding & promoting Jumble Bot!</i></blockquote>"
+    )
+    await send_jumble_rich(client, chat_id, caption)
+
+
+# ============================================================
+# OWNER / AUTH COMMANDS: /setdaily, /setbonus, /addstar, /deductstar
+# ============================================================
+
+@Client.on_message(filters.command(["setdaily"]))
+async def set_daily_amount_cmd(client: Client, message: Message):
+    if not await is_admin_or_owner(message.chat, message.from_user.id):
+        return await message.reply_text("❌ Only Owner/Auth can change daily reward.")
+    if len(message.command) < 2 or not message.command[1].isdigit():
+        return await message.reply_text("ℹ️ **Usage:** `/setdaily [amount]`")
+
+    val = int(message.command[1])
+    set_global_config("daily_bonus", val)
+    await message.reply_text(f"<blockquote>✅ Daily Bonus set to: <b>+{val} Stars</b></blockquote>", parse_mode=enums.ParseMode.HTML)
+
+
+@Client.on_message(filters.command(["setbonus"]))
+async def set_group_bonus_amount_cmd(client: Client, message: Message):
+    if not await is_admin_or_owner(message.chat, message.from_user.id):
+        return await message.reply_text("❌ Only Owner/Auth can change group addition bonus.")
+    if len(message.command) < 2 or not message.command[1].isdigit():
+        return await message.reply_text("ℹ️ **Usage:** `/setbonus [amount]`")
+
+    val = int(message.command[1])
+    set_global_config("group_bonus_points", val)
+    await message.reply_text(f"<blockquote>✅ Group Addition Bonus set to: <b>+{val} Stars</b></blockquote>", parse_mode=enums.ParseMode.HTML)
+
+
+async def _resolve_user_target(client: Client, message: Message):
+    if message.reply_to_message and message.reply_to_message.from_user:
+        return message.reply_to_message.from_user
+    for arg in message.command[1:]:
+        if not arg.isdigit() and not arg.startswith("-"):
+            try:
+                return await client.get_users(arg)
+            except Exception:
+                pass
+        elif arg.isdigit() and len(arg) > 5:
+            try:
+                return await client.get_users(int(arg))
+            except Exception:
+                pass
+    return None
+
+@Client.on_message(filters.command(["addstar", "addstars", "addpoint", "addpoints"]))
+async def add_stars_cmd(client: Client, message: Message):
+    if not is_owner(message.from_user.id) and not is_authed(message.from_user.id):
+        return await message.reply_text("❌ Sirf Bot Owner & Auth Admins balance add kar sakte hain.")
+
+    target = await _resolve_user_target(client, message)
+    amount = None
+    for p in message.command[1:]:
+        if p.isdigit() and (not target or str(target.id) != p):
+            amount = int(p)
+            break
+
+    if not target or not amount:
+        return await message.reply_text("ℹ️ **Usage:** `/addstar @user 500` ya user ke message par reply karein.")
+
+    ensure_user(target)
+    DB.execute("UPDATE users SET stars = stars + ?, points = points + ? WHERE user_id = ?", (amount, amount, target.id))
+    DB.commit()
+
+    u = dict(get_user(target.id))
+    await message.reply_text(
+        f"<blockquote>✅ <b>Stars Added!</b>\n\n"
+        f"👤 <b>User :</b> {get_mention(target)} (<code>{target.id}</code>)\n"
+        f"⭐ <b>Added :</b> <code>+{amount} Stars</code>\n"
+        f"💰 <b>New Balance :</b> <code>{u.get('stars', 0)} Stars</code></blockquote>",
+        parse_mode=enums.ParseMode.HTML
+    )
+
+
+@Client.on_message(filters.command(["deductstar", "deductstars", "removestar", "removestars"]))
+async def deduct_stars_cmd(client: Client, message: Message):
+    if not is_owner(message.from_user.id) and not is_authed(message.from_user.id):
+        return await message.reply_text("❌ Sirf Bot Owner & Auth Admins balance deduct kar sakte hain.")
+
+    target = await _resolve_user_target(client, message)
+    amount = None
+    for p in message.command[1:]:
+        if p.isdigit() and (not target or str(target.id) != p):
+            amount = int(p)
+            break
+
+    if not target or not amount:
+        return await message.reply_text("ℹ️ **Usage:** `/deductstar @user 500` ya reply karein.")
+
+    ensure_user(target)
+    DB.execute("UPDATE users SET stars = MAX(0, stars - ?), points = MAX(0, points - ?) WHERE user_id = ?", (amount, amount, target.id))
+    DB.commit()
+
+    u = dict(get_user(target.id))
+    await message.reply_text(
+        f"<blockquote>🔻 <b>Stars Deducted!</b>\n\n"
+        f"👤 <b>User :</b> {get_mention(target)} (<code>{target.id}</code>)\n"
+        f"🔻 <b>Deducted :</b> <code>-{amount} Stars</code>\n"
+        f"💰 <b>New Balance :</b> <code>{u.get('stars', 0)} Stars</code></blockquote>",
+        parse_mode=enums.ParseMode.HTML
+    )
+
+
+# ============================================================
+# STATS WITH SMART GRAPH IMAGE
 # ============================================================
 
 def get_stats_content_and_image(target, user_data):
@@ -50,7 +232,6 @@ def get_stats_content_and_image(target, user_data):
     priv_status = "🔒 Private" if is_priv else "🌐 Public"
     points_val = user_dict.get("stars", 0) if user_dict.get("stars", 0) > 0 else user_dict.get("points", 0)
 
-    # Active Boosters
     now = time.time()
     rows = DB.execute("SELECT power_type, expires_at FROM user_powers WHERE user_id=? AND expires_at > ?", (target.id, now)).fetchall()
     powers_map = {r["power_type"]: r["expires_at"] for r in rows}
@@ -87,7 +268,6 @@ def get_stats_content_and_image(target, user_data):
         ]
     ]
 
-    # Generate Image Graph
     easy_c = user_dict.get("easy_solved", 0)
     med_c = user_dict.get("medium_solved", 0)
     hard_c = user_dict.get("hard_solved", 0)
@@ -115,7 +295,7 @@ async def stats_cmd(client: Client, message: Message):
 
 
 # ============================================================
-# FILTERED LEADERBOARD (GLOBAL & GROUP | 24H, 1WK, 1MO, YEARLY)
+# FILTERED LEADERBOARDS
 # ============================================================
 
 def build_leaderboard_card(scope: str = "global", period: str = "all", chat_id: int = 0):
@@ -203,7 +383,6 @@ def build_leaderboard_card(scope: str = "global", period: str = "all", chat_id: 
         ],
     ]
 
-    # Generate Image Leaderboard
     graph_img = make_leaderboard_graph_image(title_scope, period_titles.get(period, "All Time"), top_chart_list)
     return caption, buttons, graph_img
 
@@ -223,8 +402,7 @@ async def lb_view_callback(client: Client, query: CallbackQuery):
 
     caption, buttons, graph_img = build_leaderboard_card(scope, period, chat_id)
     await query.answer()
-    
-    # Rich update with persistent buttons
+
     blocks = []
     if graph_img and os.path.isfile(graph_img):
         blocks.append(types.InputRichBlockPhoto(photo=types.InputMediaPhoto(graph_img)))
@@ -243,12 +421,11 @@ async def lb_view_callback(client: Client, query: CallbackQuery):
         await edit_jumble_rich(client, query.message.chat.id, query.message.id, caption, buttons)
 
 
-# Top Graph button callback from /stats
 @Client.on_callback_query(filters.regex(r"^refresh_leaderboard"))
 async def refresh_lb_callback(client: Client, query: CallbackQuery):
     caption, buttons, graph_img = build_leaderboard_card("global", "all", query.message.chat.id)
     await query.answer()
-    
+
     blocks = []
     if graph_img and os.path.isfile(graph_img):
         blocks.append(types.InputRichBlockPhoto(photo=types.InputMediaPhoto(graph_img)))
@@ -271,6 +448,6 @@ async def refresh_lb_callback(client: Client, query: CallbackQuery):
 async def show_my_stats_callback(client: Client, query: CallbackQuery):
     ensure_user(query.from_user)
     u = get_user(query.from_user.id)
-    caption, buttons, slider, img_path = get_stats_content_and_image(query.from_user, u)
+    caption, buttons, slider, _ = get_stats_content_and_image(query.from_user, u)
     await query.answer()
     await edit_jumble_rich(client, query.message.chat.id, query.message.id, caption, buttons, slider_row=slider)
