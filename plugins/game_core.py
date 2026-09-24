@@ -10,6 +10,7 @@ from pyrogram.types import CallbackQuery, Message
 from word_bank import choose_word, jumble_word
 from utils.rich import html_to_rich_blocks
 
+# Shared reference across game core and fight system
 ACTIVE_FIGHTS = {}
 
 
@@ -64,6 +65,7 @@ def rich_game_buttons(puzzle_id: int):
 
 
 async def start_game(client: Client, chat_id: int, difficulty: str, message_or_chat):
+    # Match running hone par puzzle bilkul start nahi hoga
     if chat_id in ACTIVE_FIGHTS:
         return
 
@@ -144,11 +146,16 @@ async def start_game(client: Client, chat_id: int, difficulty: str, message_or_c
 
 async def expire_game(client: Client, chat_id: int, puzzle_id: int, expires: float):
     await asyncio.sleep(max(0, expires - time.time()))
+
+    # Duel chalu hone par normal task foran exit karega
     if chat_id in ACTIVE_FIGHTS:
         return
 
     row = DB.execute("SELECT * FROM games WHERE chat_id=? AND puzzle_id=?", (chat_id, puzzle_id)).fetchone()
     if not row or row["solved"]:
+        return
+
+    if chat_id in ACTIVE_FIGHTS:
         return
 
     DB.execute("UPDATE games SET solved=1 WHERE chat_id=?", (chat_id,))
@@ -177,14 +184,17 @@ async def expire_game(client: Client, chat_id: int, puzzle_id: int, expires: flo
         pass
 
     await asyncio.sleep(1)
-    s = dict(get_settings(chat_id)) if get_settings(chat_id) else {}
-    if chat_id not in ACTIVE_FIGHTS and s.get("is_active", 1):
-        next_diff = s.get("default_diff") or "medium"
-        asyncio.create_task(start_game(client, chat_id, next_diff, chat_id))
+
+    # Naya regular puzzle aane se pehle strict check
+    if chat_id not in ACTIVE_FIGHTS:
+        s = dict(get_settings(chat_id)) if get_settings(chat_id) else {}
+        if s.get("is_active", 1):
+            next_diff = s.get("default_diff") or "medium"
+            asyncio.create_task(start_game(client, chat_id, next_diff, chat_id))
 
 
 # ============================================================
-# SOLVE DETECTOR (2x Boosters & Fast 1-Second Respawn)
+# SOLVE DETECTOR (Normal Games Only)
 # ============================================================
 
 EXCLUDED_COMMANDS = [
@@ -200,6 +210,8 @@ async def check_answer_handler(client: Client, message: Message):
         return
 
     chat_id = message.chat.id
+
+    # Agar group me duel chal raha hai toh ye listener answer check nahi karega
     if chat_id in ACTIVE_FIGHTS:
         return
 
@@ -286,7 +298,7 @@ async def check_answer_handler(client: Client, message: Message):
             asyncio.create_task(delete_after(win_msg, 4))
 
         await asyncio.sleep(1)
-        if s.get("is_active", 1):
+        if chat_id not in ACTIVE_FIGHTS and s.get("is_active", 1):
             next_diff = s.get("default_diff") or "medium"
             asyncio.create_task(start_game(client, chat_id, next_diff, chat_id))
 
@@ -298,6 +310,9 @@ async def check_answer_handler(client: Client, message: Message):
 @Client.on_message(filters.command(["word", "words", "puzzle", "current"]) & filters.group, group=0)
 async def current_word_cmd(client: Client, message: Message):
     chat_id = message.chat.id
+    if chat_id in ACTIVE_FIGHTS:
+        return await message.reply_text("⚔️ Group me 1v1 Battle chal rahi hai! Current battle rounds play karein.")
+
     game = DB.execute("SELECT * FROM games WHERE chat_id=? AND solved=0", (chat_id,)).fetchone()
     if not game:
         return await message.reply_text("❌ Abhi koi active puzzle nahi chal raha. `/jumble` se start karein.")
@@ -363,7 +378,7 @@ async def puzzle_buttons_listener(client: Client, query: CallbackQuery):
         letter = word[idx].upper()
         return await query.answer(f"💡 Letter #{idx + 1} is: '{letter}' ({hint_limit - hints_used} hints left)", show_alert=True)
 
-    # 2. SKIP (Admins / Owner Only with Safe Fallback Check)
+    # 2. SKIP (Admins / Owner Only)
     elif action in ["game_skip", "skip"]:
         is_adm = await check_admin_safe(query.message.chat, user_id)
         if not is_adm:
@@ -397,7 +412,7 @@ async def puzzle_buttons_listener(client: Client, query: CallbackQuery):
             asyncio.create_task(delete_after(msg, 4))
 
         await asyncio.sleep(1)
-        if s.get("is_active", 1):
+        if chat_id not in ACTIVE_FIGHTS and s.get("is_active", 1):
             next_diff = s.get("default_diff") or "medium"
             asyncio.create_task(start_game(client, chat_id, next_diff, chat_id))
 
