@@ -1,28 +1,39 @@
 from pyrogram import Client, filters, enums, types
 from pyrogram.types import Message, CallbackQuery
 from database import DB, get_settings
-from helpers import is_admin_or_owner
+from helpers import is_admin_or_owner, is_owner, is_authed
 from utils.rich import send_jumble_rich, edit_jumble_rich
 
 
-async def check_admin_safe(chat, user_id: int) -> bool:
+async def check_admin_safe(client: Client, chat, user_id: int) -> bool:
+    # 1. Bot Owner ya Auth Admin bypass
+    if is_owner(user_id) or is_authed(user_id):
+        return True
+
+    # 2. Try helpers function safely
     try:
         res = await is_admin_or_owner(chat, user_id)
-        if res is not None:
-            return bool(res)
+        if res:
+            return True
     except TypeError:
         try:
-            return bool(await is_admin_or_owner(chat.id, user_id))
+            res = await is_admin_or_owner(chat.id, user_id)
+            if res:
+                return True
         except Exception:
             pass
     except Exception:
         pass
 
+    # 3. Direct Telegram API verification fallback
     try:
-        member = await chat.get_member(user_id)
-        return member.status in (enums.ChatMemberStatus.OWNER, enums.ChatMemberStatus.ADMINISTRATOR)
+        member = await client.get_chat_member(chat.id, user_id)
+        if member.status in (enums.ChatMemberStatus.OWNER, enums.ChatMemberStatus.ADMINISTRATOR):
+            return True
     except Exception:
-        return False
+        pass
+
+    return False
 
 
 def build_settings_card(chat_id: int, chat_title: str):
@@ -158,7 +169,8 @@ async def settings_cmd(client: Client, message: Message):
     if message.chat.type == enums.ChatType.PRIVATE:
         return await message.reply_text("ℹ️ `/settings` group ke andar use karein.")
 
-    if not await check_admin_safe(message.chat, message.from_user.id):
+    is_admin = await check_admin_safe(client, message.chat, message.from_user.id)
+    if not is_admin:
         return await message.reply_text("❌ Sirf Group Admins settings access kar sakte hain.")
 
     chat_id = message.chat.id
@@ -171,7 +183,8 @@ async def settings_callback_router(client: Client, query: CallbackQuery):
     user_id = query.from_user.id
     chat_id = query.message.chat.id
 
-    if not await check_admin_safe(query.message.chat, user_id):
+    is_admin = await check_admin_safe(client, query.message.chat, user_id)
+    if not is_admin:
         return await query.answer("❌ Sirf group admins hi click kar sakte hain!", show_alert=True)
 
     data = query.data.split("|")
@@ -218,6 +231,5 @@ async def settings_callback_router(client: Client, query: CallbackQuery):
         await query.message.delete()
         return await query.answer("Closed!")
 
-    # Redraw Main Settings Page
     caption, buttons = build_settings_card(chat_id, query.message.chat.title or "Group")
     await edit_jumble_rich(client, chat_id, query.message.id, caption, buttons)
