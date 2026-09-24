@@ -2,8 +2,8 @@ import time
 from pyrogram import Client, filters, enums, types
 from pyrogram.types import CallbackQuery, Message
 from database import DB, ensure_user, get_user, get_global_config
-from helpers import get_mention, is_admin_or_owner
-from utils.rich import send_jumble_rich, html_to_rich_blocks
+from helpers import get_mention
+from utils.rich import send_jumble_rich, edit_jumble_rich
 
 def get_active_powers(user_id: int):
     now = time.time()
@@ -17,7 +17,6 @@ def format_power_bar(remaining_secs: float, total_duration: float = 3600):
     filled = int(round(ratio * 8))
     empty = 8 - filled
     mins = int(remaining_secs // 60)
-    # Green progress if > 25%, Red progress if <= 25%
     color_bar = "🟩" * filled + "⬜" * empty if ratio > 0.25 else "🟥" * filled + "⬜" * empty
     return f"{color_bar} ({mins}m left)"
 
@@ -45,7 +44,7 @@ def build_shop_card(user_id: int, user_obj):
         "<blockquote>⚡ <b>ACTIVE BOOSTERS :</b>\n"
         f"⭐ <b>2x Stars Booster :</b> {stars_status}\n"
         f"⚡ <b>2x EXP Booster :</b> {exp_status}</blockquote>\n\n"
-        "<i>Tap a card below to buy or rebuy to extend booster duration!</i>"
+        "<i>Click below buttons to purchase or rebuy!</i>"
     )
 
     buttons = [
@@ -79,6 +78,14 @@ def build_shop_card(user_id: int, user_obj):
     return caption, buttons
 
 
+# Command: /shop (Works in both Group and DM)
+@Client.on_message(filters.command(["shop", "powershop"]))
+async def open_shop_cmd(client: Client, message: Message):
+    ensure_user(message.from_user)
+    caption, buttons = build_shop_card(message.from_user.id, message.from_user)
+    await send_jumble_rich(client, message.chat.id, caption, buttons)
+
+
 @Client.on_callback_query(filters.regex(r"^(buy_shop|buy_power|shop_refresh|shop_close)"))
 async def shop_callback_handler(client: Client, query: CallbackQuery):
     data = query.data.split("|")
@@ -86,22 +93,12 @@ async def shop_callback_handler(client: Client, query: CallbackQuery):
     user_id = query.from_user.id
 
     if action in ["buy_shop", "shop_refresh"]:
-        target_id = int(data[2]) if len(data) > 2 else user_id
-        if target_id != user_id:
-            return await query.answer("❌ Yeh aapka shop session nahi hai!", show_alert=True)
         caption, buttons = build_shop_card(user_id, query.from_user)
-        blocks = html_to_rich_blocks(caption)
-        for r in buttons:
-            blocks.append(types.InputRichBlockButtons(buttons=r))
         await query.answer()
-        return await query.message.edit_rich_message(rich_message=types.InputRichMessage(blocks=blocks))
+        return await edit_jumble_rich(client, query.message.chat.id, query.message.id, caption, buttons)
 
     elif action == "buy_power":
         power_type = data[1]
-        target_id = int(data[2])
-        if target_id != user_id:
-            return await query.answer("❌ Only the player can purchase!", show_alert=True)
-
         price_key = "shop_stars2x_price" if power_type == "2x_stars" else "shop_exp2x_price"
         dur_key = "shop_stars2x_duration" if power_type == "2x_stars" else "shop_exp2x_duration"
         cost = int(get_global_config(price_key, 200))
@@ -114,11 +111,9 @@ async def shop_callback_handler(client: Client, query: CallbackQuery):
         if balance < cost:
             return await query.answer(f"❌ Low balance! You need {cost} Stars/Points.", show_alert=True)
 
-        # Deduct wallet
         DB.execute("UPDATE users SET stars = MAX(0, stars - ?), points = MAX(0, points - ?) WHERE user_id = ?", (cost, cost, user_id))
 
         now = time.time()
-        # If already active, stack the duration (Rebuy feature)
         existing = DB.execute("SELECT expires_at FROM user_powers WHERE user_id=? AND power_type=?", (user_id, power_type)).fetchone()
         new_expires = (max(existing["expires_at"], now) + duration) if (existing and existing["expires_at"] > now) else (now + duration)
 
@@ -128,55 +123,10 @@ async def shop_callback_handler(client: Client, query: CallbackQuery):
         """, (user_id, power_type, new_expires))
         DB.commit()
 
-        await query.answer(f"✅ Booster Activated! Added {duration // 60}m duration.", show_alert=True)
-
+        await query.answer(f"✅ Booster Activated! Added {duration // 60}m.", show_alert=True)
         caption, buttons = build_shop_card(user_id, query.from_user)
-        blocks = html_to_rich_blocks(caption)
-        for r in buttons:
-            blocks.append(types.InputRichBlockButtons(buttons=r))
-        return await query.message.edit_rich_message(rich_message=types.InputRichMessage(blocks=blocks))
+        return await edit_jumble_rich(client, query.message.chat.id, query.message.id, caption, buttons)
 
     elif action == "shop_close":
         await query.message.delete()
         return await query.answer("Closed!")
-
-
-# Admin Commands to set Power Shop Prices and Durations
-# Usage: /setshopprice stars 300
-@Client.on_message(filters.command(["setshopprice", "setpowerprice"]))
-async def set_power_price_cmd(client: Client, message: Message):
-    if not await is_admin_or_owner(message.chat, message.from_user.id):
-        return await message.reply_text("❌ Only Owner/Admin can change shop pricing.")
-    if len(message.command) < 3:
-        return await message.reply_text("ℹ️ **Usage:** `/setshopprice [stars/exp] [price]`")
-
-    item = message.command[1].lower()
-    try:
-        val = int(message.command[2])
-    except ValueError:
-        return await message.reply_text("❌ Price must be integer.")
-
-    key = "shop_stars2x_price" if "star" in item else "shop_exp2x_price"
-    DB.execute("INSERT OR REPLACE INTO bot_config(key, value) VALUES(?, ?)", (key, val))
-    DB.commit()
-    await message.reply_text(f"✅ `{item.title()}` 2x Booster price set to `{val}` Stars!")
-
-
-# Usage: /setpowerdur stars 60 (in minutes)
-@Client.on_message(filters.command(["setpowerdur", "setshoptimer"]))
-async def set_power_duration_cmd(client: Client, message: Message):
-    if not await is_admin_or_owner(message.chat, message.from_user.id):
-        return await message.reply_text("❌ Only Owner/Admin can change shop durations.")
-    if len(message.command) < 3:
-        return await message.reply_text("ℹ️ **Usage:** `/setpowerdur [stars/exp] [minutes]`")
-
-    item = message.command[1].lower()
-    try:
-        mins = int(message.command[2])
-    except ValueError:
-        return await message.reply_text("❌ Duration must be integer minutes.")
-
-    key = "shop_stars2x_duration" if "star" in item else "shop_exp2x_duration"
-    DB.execute("INSERT OR REPLACE INTO bot_config(key, value) VALUES(?, ?)", (key, mins * 60))
-    DB.commit()
-    await message.reply_text(f"✅ `{item.title()}` 2x Booster validity set to `{mins}` minutes!")
