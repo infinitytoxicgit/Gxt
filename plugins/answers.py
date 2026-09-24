@@ -40,7 +40,6 @@ async def group_answer_handler(client: Client, message: Message):
     if not cleaned_input:
         return
 
-    # Fight active hone par regular loop answer pick nahi karega
     if chat_id in ACTIVE_FIGHTS:
         return
 
@@ -51,7 +50,6 @@ async def group_answer_handler(client: Client, message: Message):
         return
 
     if cleaned_input == clean_answer(game["word"]):
-        # Atomically mark solved taaki race condition na ho
         updated = DB.execute("UPDATE games SET solved=1 WHERE chat_id=? AND solved=0", (chat_id,))
         if updated.rowcount != 1:
             return
@@ -67,7 +65,7 @@ async def group_answer_handler(client: Client, message: Message):
         base_pts = int(get_global_config(f"points_{diff}", 10))
         base_exp = int(get_global_config(f"exp_{diff}", 15))
 
-        # 2. Check Boosters Safely
+        # 2. Check Boosters
         has_p_boost = False
         has_e_boost = False
         try:
@@ -78,8 +76,8 @@ async def group_answer_handler(client: Client, message: Message):
             power_names = [p["power_type"] for p in powers]
             has_p_boost = ("2x_stars" in power_names or "2x_points" in power_names)
             has_e_boost = ("2x_exp" in power_names)
-        except Exception as pe:
-            print(f"[Power Check Error]: {pe}")
+        except Exception:
+            pass
 
         if not has_p_boost and u_dict.get("point_boost_until", 0) > now:
             has_p_boost = True
@@ -103,6 +101,7 @@ async def group_answer_handler(client: Client, message: Message):
         elif diff == "hard":
             diff_column = "hard_solved"
 
+        # Update User in DB safely
         try:
             DB.execute(f"""
                 UPDATE users
@@ -115,16 +114,28 @@ async def group_answer_handler(client: Client, message: Message):
                     best_streak = ?
                 WHERE user_id = ?
             """, (pts_reward, pts_reward, exp_reward, new_streak, best, user_id))
+            DB.commit()
+        except Exception as ue:
+            print(f"[Users Update Error]: {ue}")
 
+        # Insert solve log (table mismatch safety)
+        try:
             DB.execute(
-                "INSERT INTO score_history (user_id, chat_id, points, timestamp) VALUES (?, ?, ?, ?)",
+                "INSERT INTO solve_history (user_id, chat_id, points, timestamp) VALUES (?, ?, ?, ?)",
                 (user_id, chat_id, pts_reward, now)
             )
             DB.commit()
-        except Exception as de:
-            print(f"[User Update Error]: {de}")
+        except Exception:
+            try:
+                DB.execute(
+                    "INSERT INTO score_history (user_id, chat_id, points, timestamp) VALUES (?, ?, ?, ?)",
+                    (user_id, chat_id, pts_reward, now)
+                )
+                DB.commit()
+            except Exception:
+                pass
 
-        # Async Log Channel (Fail safe)
+        # Channel Log
         try:
             asyncio.create_task(send_log_event(client, message.from_user, message.chat, game["word"], txt, pts_reward, diff))
         except Exception:
@@ -173,14 +184,14 @@ async def group_answer_handler(client: Client, message: Message):
             if settings and settings.get("auto_delete") and c_msg:
                 asyncio.create_task(delete_after(c_msg, 4))
         except Exception as se:
-            print(f"[Win Message Send Error]: {se}")
+            print(f"[Win Card Error]: {se}")
 
-        # Always trigger next puzzle
+        # Next Puzzle Spawn (Guaranteed execution)
         await asyncio.sleep(2)
         try:
-            if s := get_settings(chat_id):
-                if chat_id not in ACTIVE_FIGHTS and s.get("is_active", 1):
-                    next_diff = s.get("default_diff") or "medium"
-                    asyncio.create_task(start_game(client, chat_id, next_diff, chat_id))
+            s = dict(get_settings(chat_id)) if get_settings(chat_id) else {}
+            if chat_id not in ACTIVE_FIGHTS and s.get("is_active", 1):
+                next_diff = s.get("default_diff") or "medium"
+                asyncio.create_task(start_game(client, chat_id, next_diff, chat_id))
         except Exception as ge:
-            print(f"[Next Puzzle Spawn Error]: {ge}")
+            print(f"[Spawn Next Error]: {ge}")
