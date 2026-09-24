@@ -8,30 +8,53 @@ from pyrogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton
 
 LOCK = asyncio.Lock()
 
+
 def is_owner(user_id):
-    return int(user_id) == int(OWNER_ID) if user_id else False
+    try:
+        return int(user_id) == int(OWNER_ID) if user_id else False
+    except Exception:
+        return False
+
 
 def is_authed(user_id):
     if not user_id:
         return False
     if is_owner(user_id):
         return True
-    row = DB.execute("SELECT user_id FROM auth_users WHERE user_id=?", (int(user_id),)).fetchone()
-    return bool(row)
-
-async def is_admin_or_owner(chat, user_id):
-    if is_owner(user_id):
-        return True
-    if chat.type in (ChatType.PRIVATE,):
-        return True
     try:
-        member = await chat.get_member(user_id)
-        return member.status in (ChatMemberStatus.OWNER, ChatMemberStatus.ADMINISTRATOR)
+        row = DB.execute("SELECT user_id FROM auth_users WHERE user_id=?", (int(user_id),)).fetchone()
+        return bool(row)
     except Exception:
         return False
 
+
+async def is_admin_or_owner(chat, user_id):
+    if not user_id:
+        return False
+
+    # 1. Owner & Auth bypass
+    if is_owner(user_id) or is_authed(user_id):
+        return True
+
+    # 2. Extract chat object or chat_id safely
+    if hasattr(chat, "type") and chat.type == ChatType.PRIVATE:
+        return True
+
+    try:
+        if hasattr(chat, "get_member"):
+            member = await chat.get_member(user_id)
+            return member.status in (ChatMemberStatus.OWNER, ChatMemberStatus.ADMINISTRATOR)
+    except Exception:
+        pass
+
+    return False
+
+
 def is_group(message: Message):
+    if not message or not message.chat:
+        return False
     return message.chat.type in (ChatType.GROUP, ChatType.SUPERGROUP)
+
 
 def get_mention(user_obj=None, user_id=None, first_name=None, username=None):
     if user_obj:
@@ -46,10 +69,12 @@ def get_mention(user_obj=None, user_id=None, first_name=None, username=None):
     clean_name = html.escape(str(f_name))
     if u_name:
         return f"<a href='https://t.me/{u_name}'>{clean_name}</a>"
-    return f"<a href='tg://openmessage?user_id={u_id}'>{clean_name}</a>"
+    return f"<a href='tg://user?id={u_id}'>{clean_name}</a>"
+
 
 def clean_answer(text):
     return "".join(c.lower() for c in str(text) if c.isalnum())
+
 
 async def delete_after(msg: Message, delay: int = 5):
     await asyncio.sleep(delay)
@@ -57,6 +82,7 @@ async def delete_after(msg: Message, delay: int = 5):
         await msg.delete()
     except Exception:
         pass
+
 
 async def safe_delete_and_unpin(client, chat_id: int, message_id: int):
     if not message_id:
@@ -70,6 +96,7 @@ async def safe_delete_and_unpin(client, chat_id: int, message_id: int):
     except Exception:
         pass
 
+
 async def send_log_event(client: Client, user, chat, word: str, raw_guess: str, points: int, diff: str):
     if not get_global_config("logging_enabled", 1):
         return
@@ -78,12 +105,10 @@ async def send_log_event(client: Client, user, chat, word: str, raw_guess: str, 
     user_mention = get_mention(user)
 
     buttons = []
-    # Row 1: Profile link via tg://openmessage
-    buttons.append([InlineKeyboardButton(f"👤 {user.first_name} ({user.id})", url=f"tg://openmessage?user_id={user.id}")])
+    buttons.append([InlineKeyboardButton(f"👤 {user.first_name} ({user.id})", url=f"tg://user?id={user.id}")])
 
-    # Row 2: Public or Private group link
     group_row = []
-    if chat.username:
+    if getattr(chat, "username", None):
         group_row.append(InlineKeyboardButton("🌐 Public Group", url=f"https://t.me/{chat.username}"))
     try:
         invite_link = await client.export_chat_invite_link(chat.id)
@@ -95,7 +120,7 @@ async def send_log_event(client: Client, user, chat, word: str, raw_guess: str, 
         buttons.append(group_row)
 
     log_text = (
-        "<blockquote>📝 <b>𝐉𝐔𝐌𝐁𝐋𝐄 𝐆𝐔𝐄𝐒𝐒 𝐋𝐎𝐆</b>\n\n"
+        "<blockquote>📝 <b>JUMBLE GUESS LOG</b>\n\n"
         f"👤 <b>User:</b> {user_mention} (<code>{user.id}</code>)\n"
         f"👥 <b>Group:</b> <b>{chat_title}</b> (<code>{chat.id}</code>)\n"
         f"🧩 <b>Correct Word:</b> <code>{word.upper()}</code>\n"
