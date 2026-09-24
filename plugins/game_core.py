@@ -5,6 +5,7 @@ import time
 from database import DB, get_settings, get_global_config, ensure_user
 from helpers import (
     safe_delete_and_unpin, 
+    safe_pin_and_clean,
     delete_after, 
     is_admin_or_owner, 
     is_owner, 
@@ -138,10 +139,8 @@ async def start_game(client: Client, chat_id: int, difficulty: str, message_or_c
         )
         DB.execute("UPDATE games SET message_id=? WHERE chat_id=?", (sent.id, chat_id))
         DB.commit()
-        try:
-            await sent.pin(disable_notification=True)
-        except Exception:
-            pass
+        # Pin silently and instantly clean service notifications
+        await safe_pin_and_clean(client, chat_id, sent.id)
     except Exception as e:
         print(f"Error sending rich puzzle: {e}")
 
@@ -431,3 +430,16 @@ async def puzzle_buttons_listener(client: Client, query: CallbackQuery):
         s = dict(raw_s) if raw_s else {}
         next_diff = s.get("default_diff") or "medium"
         asyncio.create_task(start_game(client, chat_id, next_diff, chat_id))
+
+
+# ============================================================
+# SERVICE PIN NOTIFICATION CLEANER
+# ============================================================
+
+@Client.on_message(filters.service & filters.group, group=9)
+async def auto_clean_service_pins(client: Client, message: Message):
+    if getattr(message, "pinned_message", None):
+        try:
+            await message.delete()
+        except Exception:
+            pass
