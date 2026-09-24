@@ -5,7 +5,8 @@ from database import ensure_user, get_user
 from helpers import get_mention
 from utils.rich import send_jumble_rich
 
-START_BANNER = "https://graph.org/file/7c0c03d68308f0c5dad42-ddb933df03f0ff0632.jpg"
+# Verified permanent banner URL
+START_BANNER = "https://envs.sh/4_q.jpg"
 
 @Client.on_message(filters.command("start") & filters.private)
 async def dm_start_handler(client: Client, message: Message):
