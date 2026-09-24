@@ -166,23 +166,33 @@ def _resolve_photo_path(photo):
     if isinstance(photo, str) and (photo.startswith("http://") or photo.startswith("https://")):
         os.makedirs("cache", exist_ok=True)
         local_path = "cache/banner_downloaded.jpg"
-        if not os.path.exists(local_path):
+        if not os.path.exists(local_path) or os.path.getsize(local_path) == 0:
             try:
-                urllib.request.urlretrieve(photo, local_path)
+                req = urllib.request.Request(
+                    photo,
+                    headers={
+                        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+                    }
+                )
+                with urllib.request.urlopen(req, timeout=10) as resp, open(local_path, "wb") as f:
+                    f.write(resp.read())
             except Exception as e:
                 print(f"[Photo Download Error]: {e}")
                 return None
-        return local_path
+        return local_path if (os.path.exists(local_path) and os.path.getsize(local_path) > 0) else None
     elif isinstance(photo, str) and os.path.isfile(photo):
-        return photo
+        return photo if os.path.getsize(photo) > 0 else None
     return None
 
 async def send_jumble_rich(client, chat_id: int, caption_html: str, rich_buttons_rows: list = None, slider_row=None, photo=None):
     blocks = []
-    
+
     photo_file = _resolve_photo_path(photo)
     if photo_file and os.path.isfile(photo_file):
-        blocks.append(types.InputRichBlockPhoto(photo=types.InputMediaPhoto(photo_file)))
+        try:
+            blocks.append(types.InputRichBlockPhoto(photo=types.InputMediaPhoto(photo_file)))
+        except Exception as pe:
+            print(f"[InputRichBlockPhoto Error]: {pe}")
 
     blocks.extend(html_to_rich_blocks(caption_html))
     if slider_row:
@@ -200,13 +210,22 @@ async def send_jumble_rich(client, chat_id: int, caption_html: str, rich_buttons
             rich_message=types.InputRichMessage(blocks=blocks),
         )
     except Exception as e:
-        print(f"[send_jumble_rich Fail]: {e}")
-        # Secondary fallback directly to message
-        return await client.send_message(
-            chat_id=chat_id,
-            text="",
-            rich_message=types.InputRichMessage(blocks=blocks)
-        )
+        print(f"[send_jumble_rich Primary Error]: {e}")
+        try:
+            # Fallback 1: Text message with same rich blocks
+            return await client.send_message(
+                chat_id=chat_id,
+                text=" ",
+                rich_message=types.InputRichMessage(blocks=blocks)
+            )
+        except Exception as fe:
+            print(f"[send_jumble_rich Fallback Error]: {fe}")
+            # Fallback 2: Plain HTML message if Kurigram Rich Message fails
+            return await client.send_message(
+                chat_id=chat_id,
+                text=caption_html,
+                parse_mode=enums.ParseMode.HTML
+            )
 
 async def edit_jumble_rich(client, chat_id: int, message_id: int, caption_html: str, rich_buttons_rows: list = None, slider_row=None):
     blocks = html_to_rich_blocks(caption_html)
