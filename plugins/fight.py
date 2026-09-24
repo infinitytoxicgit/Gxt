@@ -79,10 +79,12 @@ async def fight_timeout_task(client: Client, chat_id: int, current_round: int, r
         game = ACTIVE_FIGHTS.get(chat_id)
         if not game:
             return
-        if game.get("round") != current_round or game.get("round_token") != round_token or game.get("is_solved"):
+        if game.get("round") != current_round or game.get("round_token") != round_token or game.get("is_solved") or game.get("is_advancing"):
             return
 
         game["is_solved"] = True
+        game["is_advancing"] = True
+
         word = game["word"]
         s = dict(get_settings(chat_id)) if get_settings(chat_id) else {}
         if s.get("auto_delete") and game.get("msg_id"):
@@ -101,7 +103,7 @@ async def fight_timeout_task(client: Client, chat_id: int, current_round: int, r
             pass
 
     await asyncio.sleep(2)
-    asyncio.create_task(fight_next(client, chat_id))
+    await fight_next(client, chat_id)
 
 
 async def fight_next(client: Client, chat_id: int):
@@ -110,7 +112,6 @@ async def fight_next(client: Client, chat_id: int):
         if not game:
             return
 
-        # Cancel any previous hanging timeout task
         if game.get("timer_task") and not game["timer_task"].done():
             game["timer_task"].cancel()
 
@@ -128,6 +129,7 @@ async def fight_next(client: Client, chat_id: int):
         game["round_token"] = token
         game["word"] = word
         game["is_solved"] = False
+        game["is_advancing"] = False
         game["expires"] = time.time() + game["timer"]
         game["round_hints"] = defaultdict(lambda: {"count": 0, "indices": []})
 
@@ -179,7 +181,6 @@ async def fight_next(client: Client, chat_id: int):
         except Exception as e:
             print(f"Fight dispatch error: {e}")
 
-        # Bind running task object strictly
         game["timer_task"] = asyncio.create_task(fight_timeout_task(client, chat_id, round_num, token, timer_val))
 
 
@@ -189,7 +190,6 @@ async def resume_group_game_loop(client: Client, chat_id: int):
     raw_s = get_settings(chat_id)
     s = dict(raw_s) if raw_s else {}
 
-    # Check if group has game enabled
     if s.get("is_active", 1):
         diff = s.get("default_diff") or "medium"
         round_t = s.get(diff, 120)
@@ -310,8 +310,6 @@ async def finish_fight(client: Client, chat_id: int):
             result_caption = f"<blockquote>🤝 <b>BET DRAW! Refunded {bet_amt} points each.</b></blockquote>"
 
     await send_jumble_rich(client, chat_id, result_caption, end_buttons)
-    
-    # Agar regular fight khatam hui ya draw hua, tab direct loop resume karo
     if not (is_bet and winner and not is_rebet):
         asyncio.create_task(resume_group_game_loop(client, chat_id))
 
@@ -433,7 +431,7 @@ async def fight_chat_answer_listener(client: Client, message: Message):
 
     async with LOCK:
         game = ACTIVE_FIGHTS.get(chat_id)
-        if not game or game.get("is_solved", False):
+        if not game or game.get("is_solved") or game.get("is_advancing"):
             return
 
         user_id = message.from_user.id
@@ -441,8 +439,9 @@ async def fight_chat_answer_listener(client: Client, message: Message):
             return
 
         if message.text.strip().lower() == game["word"].strip().lower():
-            # Mark solved and cancel timer task immediately
             game["is_solved"] = True
+            game["is_advancing"] = True
+
             if game.get("timer_task") and not game["timer_task"].done():
                 game["timer_task"].cancel()
 
@@ -463,8 +462,8 @@ async def fight_chat_answer_listener(client: Client, message: Message):
             if s.get("auto_delete") and win_msg:
                 asyncio.create_task(delete_after(win_msg, 3))
 
-            await asyncio.sleep(2)
-            asyncio.create_task(fight_next(client, chat_id))
+    await asyncio.sleep(2)
+    await fight_next(client, chat_id)
 
 
 # ============================================================
@@ -478,7 +477,6 @@ async def fight_callbacks_router(client: Client, query: CallbackQuery):
     data = query.data.split("|")
     action = data[0]
 
-    # 1. Equal Hint Handling
     if action == "fight_hint":
         game = ACTIVE_FIGHTS.get(chat_id)
         if not game:
@@ -505,7 +503,6 @@ async def fight_callbacks_router(client: Client, query: CallbackQuery):
         letter = word[chosen].upper()
         return await query.answer(f"💡 Clue #{chosen + 1} is: '{letter}' ({hint_limit - user_hint['count']} hints left)", show_alert=True)
 
-    # 2. Loser triggers Comeback Challenge
     if action == "rebet_challenge":
         rebet = REBET_LOBBY.get(chat_id)
         if not rebet:
@@ -546,7 +543,6 @@ async def fight_callbacks_router(client: Client, query: CallbackQuery):
         await edit_jumble_rich(client, chat_id, query.message.id, invitation_caption, buttons)
         return
 
-    # 3. Winner accepts Comeback Challenge
     if action == "rebet_accept":
         rebet = REBET_LOBBY.get(chat_id)
         if not rebet:
@@ -563,6 +559,13 @@ async def fight_callbacks_router(client: Client, query: CallbackQuery):
         DB.execute("UPDATE users SET points=points-?, stars=stars-? WHERE user_id=?", (rebet["rebet_amount"], rebet["rebet_amount"], rebet["original_loser"]))
         DB.commit()
 
+        # Kill ongoing normal puzzle
+        old_g = DB.execute("SELECT message_id FROM games WHERE chat_id=?", (chat_id,)).fetchone()
+        if old_g and old_g["message_id"]:
+            asyncio.create_task(safe_delete_and_unpin(client, chat_id, old_g["message_id"]))
+        DB.execute("DELETE FROM games WHERE chat_id=?", (chat_id,))
+        DB.commit()
+
         ACTIVE_FIGHTS[chat_id] = {
             "players": [rebet["original_winner"], rebet["original_loser"]],
             "names": {rebet["original_winner"]: "Winner", rebet["original_loser"]: "Loser"},
@@ -570,6 +573,7 @@ async def fight_callbacks_router(client: Client, query: CallbackQuery):
             "round": 0,
             "round_token": 0,
             "is_solved": False,
+            "is_advancing": False,
             "timer_task": None,
             "total_rounds": 10,
             "scores": defaultdict(int),
@@ -585,10 +589,9 @@ async def fight_callbacks_router(client: Client, query: CallbackQuery):
         del REBET_LOBBY[chat_id]
         await query.answer("Comeback Duel Accepted! Starting...")
         await query.message.delete()
-        asyncio.create_task(fight_next(client, chat_id))
+        await fight_next(client, chat_id)
         return
 
-    # 4. Winner declines Comeback Challenge
     if action == "rebet_decline":
         rebet = REBET_LOBBY.get(chat_id)
         if not rebet:
@@ -602,7 +605,6 @@ async def fight_callbacks_router(client: Client, query: CallbackQuery):
         asyncio.create_task(resume_group_game_loop(client, chat_id))
         return
 
-    # Regular Lobby Handling
     lobby = FIGHT_LOBBY.get(chat_id)
     if not lobby:
         return await query.answer("Duel request expired ya valid nahi hai.", show_alert=True)
@@ -616,6 +618,13 @@ async def fight_callbacks_router(client: Client, query: CallbackQuery):
             DB.execute("UPDATE users SET points=points-?, stars=stars-? WHERE user_id=?", (lobby["bet_amount"], lobby["bet_amount"], lobby["p2"]))
             DB.commit()
 
+        # Kill ongoing normal puzzle so it won't clash
+        old_g = DB.execute("SELECT message_id FROM games WHERE chat_id=?", (chat_id,)).fetchone()
+        if old_g and old_g["message_id"]:
+            asyncio.create_task(safe_delete_and_unpin(client, chat_id, old_g["message_id"]))
+        DB.execute("DELETE FROM games WHERE chat_id=?", (chat_id,))
+        DB.commit()
+
         ACTIVE_FIGHTS[chat_id] = {
             "players": [lobby["p1"], lobby["p2"]],
             "names": {lobby["p1"]: lobby["p1_name"], lobby["p2"]: lobby["p2_name"]},
@@ -623,6 +632,7 @@ async def fight_callbacks_router(client: Client, query: CallbackQuery):
             "round": 0,
             "round_token": 0,
             "is_solved": False,
+            "is_advancing": False,
             "timer_task": None,
             "total_rounds": lobby["total_rounds"],
             "scores": defaultdict(int),
@@ -638,7 +648,7 @@ async def fight_callbacks_router(client: Client, query: CallbackQuery):
         del FIGHT_LOBBY[chat_id]
         await query.answer("Duel Accepted! Starting Round 1...")
         await query.message.delete()
-        asyncio.create_task(fight_next(client, chat_id))
+        await fight_next(client, chat_id)
         return
 
     elif action == "f_decline":
