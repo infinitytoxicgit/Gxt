@@ -3,7 +3,7 @@ import re
 from pyrogram import enums, types
 
 _TAG_RE = re.compile(
-    r"<(/?)(b|u|a|code|emoji)(?:\s+(?:href|id)=([^>]+))?>",
+    r"<(/?)(b|i|u|a|code|emoji)(?:\s+(?:href|id)=([^>]+))?>",
     re.IGNORECASE,
 )
 
@@ -46,6 +46,8 @@ def _parse_inline(segment):
 
             if open_tag == "b":
                 parts.append(types.RichTextBold(text=inner))
+            elif open_tag == "i":
+                parts.append(types.RichTextItalic(text=inner))
             elif open_tag == "u":
                 parts.append(types.RichTextUnderline(text=inner))
             elif open_tag == "code":
@@ -101,18 +103,11 @@ def html_to_rich_blocks(caption_html: str):
         if inner_items and inner_items[-1] == "\n":
             inner_items.pop()
 
+        # Regular Blue Blockquote (Non-expandable) & Expandable both supported
         if is_expandable and hasattr(types, "InputRichBlockExpandableBlockQuotation"):
-            try:
-                blocks.append(types.InputRichBlockExpandableBlockQuotation(text=inner_items))
-            except Exception:
-                blocks.append(types.InputRichBlockParagraph(text=inner_items))
-        elif hasattr(types, "InputRichBlockBlockQuotation"):
-            try:
-                blocks.append(types.InputRichBlockBlockQuotation(text=inner_items))
-            except Exception:
-                blocks.append(types.InputRichBlockParagraph(text=inner_items))
+            blocks.append(types.InputRichBlockExpandableBlockQuotation(text=inner_items))
         else:
-            blocks.append(types.InputRichBlockParagraph(text=inner_items))
+            blocks.append(types.InputRichBlockBlockQuotation(text=inner_items))
 
         last_idx = end
 
