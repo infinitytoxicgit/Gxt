@@ -163,7 +163,7 @@ async def expire_game(client: Client, chat_id: int, puzzle_id: int, expires: flo
 
 
 # ============================================================
-# SOLVE DETECTOR (2x Boosters & Fast Spawning)
+# SOLVE DETECTOR (2x Boosters, Timeframe Tracking & Fast Spawning)
 # ============================================================
 
 @Client.on_message(filters.text & filters.group, group=1)
@@ -207,7 +207,7 @@ async def check_answer_handler(client: Client, message: Message):
         reward_pts = base_pts * 2 if has_2x_stars else base_pts
         reward_exp = base_exp * 2 if has_2x_exp else base_exp
 
-        # Field updates for solved count
+        # User stats update
         diff_col = f"{diff}_solved"
         DB.execute(f"""
             UPDATE users SET 
@@ -220,6 +220,12 @@ async def check_answer_handler(client: Client, message: Message):
                 best_streak = MAX(best_streak, streak + 1)
             WHERE user_id = ?
         """, (reward_pts, reward_pts, reward_exp, user.id))
+
+        # Solve history update for 24h, weekly, monthly, and yearly leaderboards
+        DB.execute(
+            "INSERT INTO solve_history (user_id, chat_id, points, timestamp) VALUES (?, ?, ?, ?)",
+            (user.id, chat_id, reward_pts, now)
+        )
         DB.commit()
 
         booster_badge = ""
