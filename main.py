@@ -4,7 +4,7 @@ import time
 from config import API_ID, API_HASH, BOT_TOKEN, OWNER_ID
 from database import DB
 from plugins.game_core import start_game
-from pyrogram import Client
+from pyrogram import Client, idle
 
 app = Client(
     "advanced_jumble_bot",
@@ -28,22 +28,35 @@ async def auto_backup_task():
             print(f"Backup failed: {e}")
 
 async def resume_all_active_games():
-    await asyncio.sleep(3)
-    rows = DB.execute("SELECT chat_id, default_diff FROM settings WHERE is_active = 1 AND chat_id != 0").fetchall()
-    for row in rows:
-        c_id = row["chat_id"]
-        diff = row["default_diff"] or "medium"
-        try:
-            DB.execute("DELETE FROM games WHERE chat_id=?", (c_id,))
-            DB.commit()
-            await start_game(app, c_id, diff, c_id)
-            await asyncio.sleep(0.8)
-        except Exception as e:
-            print(f"Auto-resume error in {c_id}: {e}")
+    await asyncio.sleep(4)
+    try:
+        rows = DB.execute("SELECT chat_id, default_diff FROM settings WHERE is_active = 1 AND chat_id != 0").fetchall()
+        for row in rows:
+            c_id = row["chat_id"]
+            diff = row["default_diff"] or "medium"
+            try:
+                DB.execute("DELETE FROM games WHERE chat_id=?", (c_id,))
+                DB.commit()
+                await start_game(app, c_id, diff, c_id)
+                await asyncio.sleep(0.8)
+            except Exception as e:
+                print(f"Auto-resume error in {c_id}: {e}")
+    except Exception as err:
+        print(f"Resume DB query error: {err}")
+
+async def main():
+    print("🚀 Modular Jumble Bot Starting...")
+    await app.start()
+    bot_me = await app.get_me()
+    print(f"✅ Bot Online as @{bot_me.username} (ID: {bot_me.id})")
+
+    # Background tasks starting after client is fully connected
+    asyncio.create_task(resume_all_active_games())
+    asyncio.create_task(auto_backup_task())
+
+    await idle()
+    await app.stop()
 
 if __name__ == "__main__":
-    print("🚀 Modular Jumble Bot Starting...")
     loop = asyncio.get_event_loop()
-    loop.create_task(resume_all_active_games())
-    loop.create_task(auto_backup_task())
-    app.run()
+    loop.run_until_complete(main())
