@@ -178,7 +178,7 @@ async def resume_group_game_loop(client: Client, chat_id: int):
     raw_s = get_settings(chat_id)
     s = dict(raw_s) if raw_s else {}
 
-    # Sirf us group ki saved settings check hogi
+    # Sirf us group ki saved settings trigger hongi
     if s.get("is_active", 1):
         diff = s.get("default_diff") or "medium"
         try:
@@ -287,7 +287,9 @@ async def finish_fight(client: Client, chat_id: int):
             result_caption = f"<blockquote>🤝 <b>BET DRAW! Refunded {bet_amt} points each.</b></blockquote>"
 
     await send_jumble_rich(client, chat_id, result_caption, end_buttons)
-    asyncio.create_task(resume_group_game_loop(client, chat_id))
+    # Agar rebet offer hua hai toh loser ke decision ka wait karenge, warna turant loop continue hoga
+    if not (is_bet and winner and not is_rebet):
+        asyncio.create_task(resume_group_game_loop(client, chat_id))
 
 
 # ============================================================
@@ -446,7 +448,7 @@ async def fight_callbacks_router(client: Client, query: CallbackQuery):
     data = query.data.split("|")
     action = data[0]
 
-    # Equal Hint Handling during Fight
+    # 1. Equal Hint Handling during Fight
     if action == "fight_hint":
         game = ACTIVE_FIGHTS.get(chat_id)
         if not game:
@@ -473,18 +475,64 @@ async def fight_callbacks_router(client: Client, query: CallbackQuery):
         letter = word[chosen].upper()
         return await query.answer(f"💡 Clue #{chosen + 1} is: '{letter}' ({hint_limit - user_hint['count']} hints left)", show_alert=True)
 
-    # Rebet Challenge
+    # 2. Loser triggers Comeback Challenge (Needs Winner's Acceptance)
     if action == "rebet_challenge":
         rebet = REBET_LOBBY.get(chat_id)
         if not rebet:
             return await query.answer("Re-bet session expire ho chuka hai.", show_alert=True)
         if user_id != rebet["original_loser"]:
-            return await query.answer("Sirf loser hi comeback challenge kar sakta hai!", show_alert=True)
+            return await query.answer("Sirf loser hi comeback challenge bhej sakta hai!", show_alert=True)
 
         loser_u = dict(get_user(user_id))
         pts = loser_u.get("stars", 0) if loser_u.get("stars", 0) > 0 else loser_u.get("points", 0)
         if pts < rebet["rebet_amount"]:
             return await query.answer("Balance kam hai re-bet ke liye!", show_alert=True)
+
+        await query.answer("Comeback Request Sent! Waiting for Winner to accept...")
+
+        invitation_caption = (
+            "<blockquote>🔥 <u><b>COMEBACK RE-BET DUEL OFFERED!</b></u></blockquote>\n\n"
+            f"<blockquote>👤 <b>Challenger (Loser):</b> {rebet['loser_mention']}\n"
+            f"👑 <b>Target (Winner):</b> {rebet['winner_mention']}\n"
+            f"💵 <b>Stake :</b> <code>{rebet['rebet_amount']} pts</code> (+100 Bonus Pot)\n"
+            f"🏆 <b>Rounds :</b> <code>10 Rounds</code></blockquote>\n\n"
+            f"<blockquote>⚠️ {rebet['winner_mention']}, kya aap yeh challenge accept karte hain?</blockquote>"
+        )
+
+        buttons = [
+            [
+                types.RichMessageButton(
+                    text="✅ Accept Comeback",
+                    style=enums.ButtonStyle.SUCCESS,
+                    callback_data="rebet_accept"
+                ),
+                types.RichMessageButton(
+                    text="❌ Decline",
+                    style=enums.ButtonStyle.DANGER,
+                    callback_data="rebet_decline"
+                )
+            ]
+        ]
+        await edit_jumble_rich(client, chat_id, query.message.id, invitation_caption, buttons)
+        return
+
+    # 3. Winner accepts Comeback Challenge
+    if action == "rebet_accept":
+        rebet = REBET_LOBBY.get(chat_id)
+        if not rebet:
+            return await query.answer("Request expire ho chuki hai.", show_alert=True)
+        if user_id != rebet["original_winner"]:
+            return await query.answer("Sirf winner hi challenge accept kar sakta hai!", show_alert=True)
+
+        winner_u = dict(get_user(user_id))
+        pts = winner_u.get("stars", 0) if winner_u.get("stars", 0) > 0 else winner_u.get("points", 0)
+        if pts < rebet["rebet_amount"]:
+            return await query.answer("Aapka balance kam hai!", show_alert=True)
+
+        # Deduct stake from both
+        DB.execute("UPDATE users SET points=points-?, stars=stars-? WHERE user_id=?", (rebet["rebet_amount"], rebet["rebet_amount"], rebet["original_winner"]))
+        DB.execute("UPDATE users SET points=points-?, stars=stars-? WHERE user_id=?", (rebet["rebet_amount"], rebet["rebet_amount"], rebet["original_loser"]))
+        DB.commit()
 
         ACTIVE_FIGHTS[chat_id] = {
             "players": [rebet["original_winner"], rebet["original_loser"]],
@@ -504,11 +552,26 @@ async def fight_callbacks_router(client: Client, query: CallbackQuery):
             "is_rebet": True,
         }
         del REBET_LOBBY[chat_id]
-        await query.answer("Comeback Re-Bet Accepted!")
+        await query.answer("Comeback Duel Accepted! Starting...")
         await query.message.delete()
         asyncio.create_task(fight_next(client, chat_id))
         return
 
+    # 4. Winner declines Comeback Challenge
+    if action == "rebet_decline":
+        rebet = REBET_LOBBY.get(chat_id)
+        if not rebet:
+            return await query.answer("Request expire ho chuki hai.", show_alert=True)
+        if user_id not in (rebet["original_winner"], rebet["original_loser"]):
+            return await query.answer("Aap is match me shamil nahi hain.", show_alert=True)
+
+        del REBET_LOBBY[chat_id]
+        await query.message.delete()
+        await query.answer("Comeback duel declined.")
+        asyncio.create_task(resume_group_game_loop(client, chat_id))
+        return
+
+    # Regular Lobby Handling
     lobby = FIGHT_LOBBY.get(chat_id)
     if not lobby:
         return await query.answer("Duel request expired ya valid nahi hai.", show_alert=True)
