@@ -4,6 +4,7 @@ from database import DB, get_settings
 from helpers import is_admin_or_owner
 from utils.rich import send_jumble_rich, edit_jumble_rich
 
+
 def build_settings_card(chat_id: int, chat_title: str):
     raw_s = get_settings(chat_id)
     s = dict(raw_s) if raw_s else {}
@@ -19,15 +20,16 @@ def build_settings_card(chat_id: int, chat_title: str):
     st_text = "🟢 Running" if is_active else "🔴 Stopped"
     del_text = "🟢 Enabled" if auto_del else "🔴 Disabled"
 
+    # Separate neat blockquotes
     caption = (
-        f"<blockquote>⚙️ <u><b>𝐉ᴜᴍʙʟᴇ 𝐆ʀᴏᴜᴘ 𝐒ᴇᴛᴛɪɴɢs</b></u>\n\n"
-        f"👥 <b>Group :</b> <code>{chat_title}</code>\n"
-        f"🆔 <b>Chat ID :</b> <code>{chat_id}</code>\n\n"
-        f"⚡ <b>Game Status :</b> {st_text}\n"
+        "<blockquote>⚙️ <u><b>𝐉𝐔𝐌𝐁𝐋𝐄 𝐆𝐑𝐎𝐔𝐏 𝐒𝐄𝐓𝐓𝐈𝐍𝐆𝐒</b></u></blockquote>\n\n"
+        f"<blockquote>👥 <b>Group :</b> <code>{chat_title}</code>\n"
+        f"🆔 <b>Chat ID :</b> <code>{chat_id}</code></blockquote>\n\n"
+        f"<blockquote>⚡ <b>Game Status :</b> {st_text}\n"
         f"🗑️ <b>Auto Delete :</b> {del_text}\n"
         f"🎯 <b>Default Mode :</b> <code>{cur_diff.title()}</code>\n"
         f"⏱️ <b>Round Timers :</b> Easy: <code>{easy_t}s</code> | Med: <code>{med_t}s</code> | Hard: <code>{hard_t}s</code></blockquote>\n\n"
-        f"<blockquote><i>Click buttons below to switch options live:</i></blockquote>"
+        "<blockquote><i>Tap buttons below to toggle options live:</i></blockquote>"
     )
 
     state_btn_style = enums.ButtonStyle.SUCCESS if is_active else enums.ButtonStyle.DANGER
@@ -89,8 +91,8 @@ def build_timers_card(chat_id: int):
     cur_val = int(s.get(cur_diff, 120))
 
     caption = (
-        f"<blockquote>⏱️ <u><b>𝐂𝐇𝐎𝐎𝐒𝐄 𝐑𝐎𝐔𝐍𝐃 𝐓𝐈𝐌𝐄𝐑𝐒 ({cur_diff.upper()})</b></u>\n\n"
-        f"Selected Duration: <b>{cur_val}s</b>\n"
+        f"<blockquote>⏱️ <u><b>𝐂𝐇𝐎𝐎𝐒𝐄 𝐑𝐎𝐔𝐍𝐃 𝐓𝐈𝐌𝐄𝐑𝐒 ({cur_diff.upper()})</b></u></blockquote>\n\n"
+        f"<blockquote>Selected Duration: <b>{cur_val}s</b>\n"
         f"Active timer is <b>Green</b>, others are <b>Red</b>. Tap to change:</blockquote>"
     )
 
@@ -127,6 +129,10 @@ def build_timers_card(chat_id: int):
     ]
     return caption, buttons
 
+
+# ============================================================
+# COMMAND & CALLBACK ROUTER
+# ============================================================
 
 @Client.on_message(filters.command(["settings", "setting", "jumblesettings"]))
 async def settings_cmd(client: Client, message: Message):
@@ -193,6 +199,6 @@ async def settings_callback_router(client: Client, query: CallbackQuery):
         await query.message.delete()
         return await query.answer("Closed!")
 
-    # Redraw Main Settings Page
+    # Redraw Main Settings Page live
     caption, buttons = build_settings_card(chat_id, query.message.chat.title or "Group")
     await edit_jumble_rich(client, chat_id, query.message.id, caption, buttons)
