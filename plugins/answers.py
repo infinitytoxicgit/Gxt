@@ -58,8 +58,12 @@ async def group_answer_handler(client: Client, message: Message):
         ensure_user(message.from_user)
         u = get_user(user_id)
         u_dict = dict(u) if u else {}
-        settings = get_settings(chat_id)
-        diff = game["difficulty"].lower()
+
+        # Fix: Convert sqlite3.Row safely to dict
+        raw_settings = get_settings(chat_id)
+        settings = dict(raw_settings) if raw_settings else {}
+
+        diff = str(game["difficulty"]).lower()
 
         # 1. Base Rewards
         base_pts = int(get_global_config(f"points_{diff}", 10))
@@ -101,7 +105,6 @@ async def group_answer_handler(client: Client, message: Message):
         elif diff == "hard":
             diff_column = "hard_solved"
 
-        # Update User in DB safely
         try:
             DB.execute(f"""
                 UPDATE users
@@ -118,7 +121,6 @@ async def group_answer_handler(client: Client, message: Message):
         except Exception as ue:
             print(f"[Users Update Error]: {ue}")
 
-        # Insert solve log (table mismatch safety)
         try:
             DB.execute(
                 "INSERT INTO solve_history (user_id, chat_id, points, timestamp) VALUES (?, ?, ?, ?)",
@@ -135,14 +137,14 @@ async def group_answer_handler(client: Client, message: Message):
             except Exception:
                 pass
 
-        # Channel Log
+        # Channel log error catch
         try:
             asyncio.create_task(send_log_event(client, message.from_user, message.chat, game["word"], txt, pts_reward, diff))
         except Exception:
             pass
 
         # Old Puzzle delete if auto_delete enabled
-        if settings and settings.get("auto_delete") and game["message_id"]:
+        if settings.get("auto_delete") and game["message_id"]:
             await safe_delete_and_unpin(client, chat_id, game["message_id"])
 
         u_mention = get_mention(message.from_user)
@@ -181,17 +183,16 @@ async def group_answer_handler(client: Client, message: Message):
 
         try:
             c_msg = await send_jumble_rich(client, chat_id, ans_caption, buttons)
-            if settings and settings.get("auto_delete") and c_msg:
+            if settings.get("auto_delete") and c_msg:
                 asyncio.create_task(delete_after(c_msg, 4))
         except Exception as se:
             print(f"[Win Card Error]: {se}")
 
-        # Next Puzzle Spawn (Guaranteed execution)
+        # Spawn Next Puzzle
         await asyncio.sleep(2)
         try:
-            s = dict(get_settings(chat_id)) if get_settings(chat_id) else {}
-            if chat_id not in ACTIVE_FIGHTS and s.get("is_active", 1):
-                next_diff = s.get("default_diff") or "medium"
+            if chat_id not in ACTIVE_FIGHTS and settings.get("is_active", 1):
+                next_diff = settings.get("default_diff") or "medium"
                 asyncio.create_task(start_game(client, chat_id, next_diff, chat_id))
         except Exception as ge:
             print(f"[Spawn Next Error]: {ge}")
