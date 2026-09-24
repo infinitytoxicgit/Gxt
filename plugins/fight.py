@@ -70,12 +70,16 @@ def build_fight_lobby_card(lobby_data):
 
 
 async def fight_timeout_task(client: Client, chat_id: int, current_round: int, round_token: int, timer_duration: int):
-    await asyncio.sleep(timer_duration)
+    try:
+        await asyncio.sleep(timer_duration)
+    except asyncio.CancelledError:
+        return
 
     async with LOCK:
         game = ACTIVE_FIGHTS.get(chat_id)
-        # Strict validation: Only execute if round hasn't progressed or been solved
-        if not game or game.get("round") != current_round or game.get("round_token") != round_token or game.get("is_solved", False):
+        if not game:
+            return
+        if game.get("round") != current_round or game.get("round_token") != round_token or game.get("is_solved"):
             return
 
         game["is_solved"] = True
@@ -106,6 +110,10 @@ async def fight_next(client: Client, chat_id: int):
         if not game:
             return
 
+        # Cancel any previous hanging timeout task
+        if game.get("timer_task") and not game["timer_task"].done():
+            game["timer_task"].cancel()
+
         game["round"] += 1
         total_r = game.get("total_rounds", 10)
         if game["round"] > total_r:
@@ -116,7 +124,6 @@ async def fight_next(client: Client, chat_id: int):
         word = random.choice(WORDS[diff])
         jumbled = jumble_word(word)
 
-        # Unique token for this exact round to kill duplicate race triggers
         token = random.randint(100000, 999999)
         game["round_token"] = token
         game["word"] = word
@@ -172,19 +179,35 @@ async def fight_next(client: Client, chat_id: int):
         except Exception as e:
             print(f"Fight dispatch error: {e}")
 
-        # Spawn strictly locked timeout task
-        asyncio.create_task(fight_timeout_task(client, chat_id, round_num, token, timer_val))
+        # Bind running task object strictly
+        game["timer_task"] = asyncio.create_task(fight_timeout_task(client, chat_id, round_num, token, timer_val))
 
 
 async def resume_group_game_loop(client: Client, chat_id: int):
     ACTIVE_FIGHTS.pop(chat_id, None)
-    await asyncio.sleep(2)
 
     raw_s = get_settings(chat_id)
     s = dict(raw_s) if raw_s else {}
 
+    # Check if group has game enabled
     if s.get("is_active", 1):
         diff = s.get("default_diff") or "medium"
+        round_t = s.get(diff, 120)
+
+        resume_caption = (
+            "<blockquote>🔄 <u><b>RESUMING GROUP GAME LOOP</b></u></blockquote>\n\n"
+            f"<blockquote>⚙️ Group Settings Applied:\n"
+            f"🎯 <b>Mode :</b> <code>{diff.title()}</code> | ⏱️ <b>Timer :</b> <code>{round_t}s</code>\n\n"
+            f"🚀 <i>Spawning next puzzle in 3 seconds...</i></blockquote>"
+        )
+        try:
+            r_msg = await send_jumble_rich(client, chat_id, resume_caption)
+            if s.get("auto_delete") and r_msg:
+                asyncio.create_task(delete_after(r_msg, 5))
+        except Exception:
+            pass
+
+        await asyncio.sleep(3)
         try:
             DB.execute("DELETE FROM games WHERE chat_id=?", (chat_id,))
             DB.commit()
@@ -197,6 +220,9 @@ async def finish_fight(client: Client, chat_id: int):
     game = ACTIVE_FIGHTS.pop(chat_id, None)
     if not game:
         return
+
+    if game.get("timer_task") and not game["timer_task"].done():
+        game["timer_task"].cancel()
 
     s = dict(get_settings(chat_id)) if get_settings(chat_id) else {}
     if s.get("auto_delete") and game.get("msg_id"):
@@ -284,6 +310,8 @@ async def finish_fight(client: Client, chat_id: int):
             result_caption = f"<blockquote>🤝 <b>BET DRAW! Refunded {bet_amt} points each.</b></blockquote>"
 
     await send_jumble_rich(client, chat_id, result_caption, end_buttons)
+    
+    # Agar regular fight khatam hui ya draw hua, tab direct loop resume karo
     if not (is_bet and winner and not is_rebet):
         asyncio.create_task(resume_group_game_loop(client, chat_id))
 
@@ -413,8 +441,11 @@ async def fight_chat_answer_listener(client: Client, message: Message):
             return
 
         if message.text.strip().lower() == game["word"].strip().lower():
-            # Mark solved immediately to block timeout race triggers
+            # Mark solved and cancel timer task immediately
             game["is_solved"] = True
+            if game.get("timer_task") and not game["timer_task"].done():
+                game["timer_task"].cancel()
+
             game["scores"][user_id] += 1
 
             s = dict(get_settings(chat_id)) if get_settings(chat_id) else {}
@@ -447,7 +478,7 @@ async def fight_callbacks_router(client: Client, query: CallbackQuery):
     data = query.data.split("|")
     action = data[0]
 
-    # 1. Equal Hint Handling during Fight
+    # 1. Equal Hint Handling
     if action == "fight_hint":
         game = ACTIVE_FIGHTS.get(chat_id)
         if not game:
@@ -539,6 +570,7 @@ async def fight_callbacks_router(client: Client, query: CallbackQuery):
             "round": 0,
             "round_token": 0,
             "is_solved": False,
+            "timer_task": None,
             "total_rounds": 10,
             "scores": defaultdict(int),
             "word": None,
@@ -591,6 +623,7 @@ async def fight_callbacks_router(client: Client, query: CallbackQuery):
             "round": 0,
             "round_token": 0,
             "is_solved": False,
+            "timer_task": None,
             "total_rounds": lobby["total_rounds"],
             "scores": defaultdict(int),
             "word": None,
