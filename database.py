@@ -113,6 +113,14 @@ def init_db():
         points INTEGER,
         timestamp REAL
     );
+
+    CREATE TABLE IF NOT EXISTS solve_history (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id INTEGER,
+        chat_id INTEGER,
+        points INTEGER,
+        timestamp REAL
+    );
     """)
     DB.commit()
 
@@ -128,6 +136,7 @@ def init_db():
         "hard_solved": "INTEGER DEFAULT 0",
         "daily_claims": "INTEGER DEFAULT 0",
         "last_daily": "REAL DEFAULT 0",
+        "is_private": "INTEGER DEFAULT 0",
     }
     for col, col_type in migrations.items():
         if col not in user_cols:
@@ -146,7 +155,7 @@ def init_db():
         "exp_easy": 15,
         "exp_medium": 25,
         "exp_hard": 40,
-        
+
         # Points & Hints Configs
         "points_easy": 10,
         "points_medium": 20,
@@ -154,7 +163,7 @@ def init_db():
         "hints_easy": 3,
         "hints_medium": 3,
         "hints_hard": 3,
-        
+
         # Bonus & Daily
         "daily_bonus": 100,
         "daily_points": 100,
@@ -231,7 +240,7 @@ def set_settings(chat_id, key, value):
 
 def get_top_players(limit=5):
     return DB.execute(
-        "SELECT user_id, name, points, stars, exp FROM users ORDER BY stars DESC, points DESC LIMIT ?",
+        "SELECT user_id, name, points, stars, exp, is_private FROM users ORDER BY stars DESC, points DESC LIMIT ?",
         (limit,),
     ).fetchall()
 
