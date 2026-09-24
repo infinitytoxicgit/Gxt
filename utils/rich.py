@@ -105,9 +105,6 @@ def html_to_rich_blocks(caption_html: str):
         if inner_items and inner_items[-1] == "\n":
             inner_items.pop()
 
-        # Kurigram signature compatibility:
-        # ExpandableBlockQuotation accepts text=
-        # BlockQuotation accepts blocks= (or text= depending on build)
         if is_expandable and hasattr(types, "InputRichBlockExpandableBlockQuotation"):
             try:
                 blocks.append(types.InputRichBlockExpandableBlockQuotation(text=inner_items))
@@ -115,7 +112,6 @@ def html_to_rich_blocks(caption_html: str):
                 blocks.append(types.InputRichBlockExpandableBlockQuotation(blocks=sub_paragraphs))
         else:
             try:
-                # Primary Kurigram signature for normal blockquote
                 blocks.append(types.InputRichBlockBlockQuotation(blocks=sub_paragraphs))
             except TypeError:
                 try:
@@ -184,4 +180,30 @@ async def send_jumble_rich(client, chat_id: int, caption_html: str, rich_buttons
     return await client.send_rich_message(
         chat_id=chat_id,
         rich_message=types.InputRichMessage(blocks=blocks),
+    )
+
+async def edit_jumble_rich(client, chat_id: int, message_id: int, caption_html: str, rich_buttons_rows: list = None, slider_row=None):
+    blocks = html_to_rich_blocks(caption_html)
+    if slider_row:
+        blocks.append(slider_row)
+    if rich_buttons_rows:
+        for row in rich_buttons_rows:
+            blocks.append(types.InputRichBlockButtons(buttons=row))
+
+    if hasattr(client, "edit_rich_message"):
+        try:
+            return await client.edit_rich_message(
+                chat_id=chat_id,
+                message_id=message_id,
+                rich_message=types.InputRichMessage(blocks=blocks)
+            )
+        except Exception:
+            pass
+
+    # Fallback to standard edit if native rich edit fails
+    return await client.edit_message_text(
+        chat_id=chat_id,
+        message_id=message_id,
+        text=caption_html,
+        parse_mode=enums.ParseMode.HTML
     )
