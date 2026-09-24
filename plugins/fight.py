@@ -17,6 +17,30 @@ FIGHT_LOBBY = {}
 REBET_LOBBY = {}
 
 
+def get_user_balance(user_id: int) -> int:
+    u = get_user(user_id)
+    if not u:
+        return 0
+    u_dict = dict(u)
+    return int(u_dict.get("stars", 0) if u_dict.get("stars", 0) > 0 else u_dict.get("points", 0))
+
+
+def deduct_user_stars(user_id: int, amount: int):
+    DB.execute(
+        "UPDATE users SET stars = MAX(0, stars - ?), points = MAX(0, points - ?) WHERE user_id = ?",
+        (amount, amount, user_id)
+    )
+    DB.commit()
+
+
+def add_user_stars(user_id: int, amount: int):
+    DB.execute(
+        "UPDATE users SET stars = stars + ?, points = points + ? WHERE user_id = ?",
+        (amount, amount, user_id)
+    )
+    DB.commit()
+
+
 def build_fight_lobby_card(lobby_data):
     m1 = lobby_data["m1"]
     m2 = lobby_data["m2"]
@@ -27,7 +51,7 @@ def build_fight_lobby_card(lobby_data):
     amt = lobby_data["bet_amount"]
 
     header = "💰 <u><b>HIGH STAKES BET FIGHT</b></u>" if is_bet else "⚔️ <u><b>JUMBLE FIGHT INVITATION</b></u>"
-    bet_line = f"💵 <b>Bet Amount :</b> <code>{amt} Points / Stars</code>\n" if is_bet else ""
+    bet_line = f"💵 <b>Bet Stake :</b> <code>{amt} Stars (Deducted on Accept)</code>\n" if is_bet else ""
 
     caption = (
         f"<blockquote>{header}</blockquote>\n\n"
@@ -94,15 +118,16 @@ async def fight_timeout_task(client: Client, chat_id: int, current_round: int, r
             caption = (
                 f"<blockquote>⏰ <u><b>ROUND {current_round} TIMEOUT!</b></u></blockquote>\n\n"
                 f"<blockquote>❌ <b>Nobody solved it! Answer was :</b> <code>{word.upper()}</code>\n"
-                f"🔄 <i>Next round starting in 2 seconds...</i></blockquote>"
+                f"🔄 <i>Next round starting in 3 seconds...</i></blockquote>"
             )
             t_msg = await send_jumble_rich(client, chat_id, caption)
             if s.get("auto_delete") and t_msg:
-                asyncio.create_task(delete_after(t_msg, 3))
+                asyncio.create_task(delete_after(t_msg, 4))
         except Exception:
             pass
 
-    await asyncio.sleep(2)
+    # Timeout hone par 3 seconds ka cool-down taaki double-spawn na ho
+    await asyncio.sleep(3)
     await fight_next(client, chat_id)
 
 
@@ -141,7 +166,7 @@ async def fight_next(client: Client, chat_id: int):
 
         header_icon = "💰" if game.get("is_bet") else "⚔️"
         header_name = "𝐉𝐔𝐌𝐁𝐋𝐄 𝐁𝐄𝐓 𝐅𝐈𝐆𝐇𝐓" if game.get("is_bet") else "𝐉𝐔𝐌𝐁𝐋𝐄 𝐅𝐈𝐆𝐇𝐓"
-        extra_info = f"\n💵 <b>Stake Pot:</b> <code>{game.get('bet_amount')} pts</code>" if game.get("is_bet") else ""
+        extra_info = f"\n💵 <b>Stake Pot:</b> <code>{game.get('bet_amount')} Stars</code>" if game.get("is_bet") else ""
         hint_limit = int(get_global_config(f"hints_{diff}", 3))
 
         p1, p2 = game["players"]
@@ -202,12 +227,13 @@ async def resume_group_game_loop(client: Client, chat_id: int):
         )
         try:
             r_msg = await send_jumble_rich(client, chat_id, resume_caption)
-            if s.get("auto_delete") and r_msg:
-                asyncio.create_task(delete_after(r_msg, 5))
+            # Auto delete resume notice
+            if r_msg:
+                asyncio.create_task(delete_after(r_msg, 4))
         except Exception:
             pass
 
-        await asyncio.sleep(3)
+        await asyncio.sleep(4)
         try:
             DB.execute("DELETE FROM games WHERE chat_id=?", (chat_id,))
             DB.commit()
@@ -257,13 +283,14 @@ async def finish_fight(client: Client, chat_id: int):
         if winner:
             if is_rebet:
                 total_pot = (bet_amt * 2) + 100
-                DB.execute("UPDATE users SET points=points+?, stars=stars+?, bet_wins=bet_wins+1 WHERE user_id=?", (total_pot, total_pot, winner))
+                add_user_stars(winner, total_pot)
+                DB.execute("UPDATE users SET bet_wins=bet_wins+1 WHERE user_id=?", (winner,))
                 DB.execute("UPDATE users SET bet_losses=bet_losses+1 WHERE user_id=?", (loser,))
                 DB.execute("INSERT INTO score_history (user_id, chat_id, points, timestamp) VALUES (?, ?, ?, ?)", (winner, chat_id, total_pot, now))
                 DB.commit()
                 result_caption = (
                     "<blockquote>💰 <u><b>COMEBACK RE-BET OVER!</b></u></blockquote>\n\n"
-                    f"<blockquote>🏆 <b>Final Winner :</b> {game['mentions'][winner]} (+{total_pot} pts/stars)\n"
+                    f"<blockquote>🏆 <b>Final Winner :</b> {game['mentions'][winner]} (+{total_pot} Stars)\n"
                     f"💀 <b>Loser :</b> {game['mentions'][loser]}</blockquote>"
                 )
             else:
@@ -272,8 +299,10 @@ async def finish_fight(client: Client, chat_id: int):
                 loser_cashback = total_pot - win_reward
                 rebet_stake = int(bet_amt * 0.25)
 
-                DB.execute("UPDATE users SET points=points+?, stars=stars+?, bet_wins=bet_wins+1 WHERE user_id=?", (win_reward, win_reward, winner))
-                DB.execute("UPDATE users SET points=points+?, stars=stars+?, bet_losses=bet_losses+1 WHERE user_id=?", (loser_cashback, loser_cashback, loser))
+                add_user_stars(winner, win_reward)
+                add_user_stars(loser, loser_cashback)
+                DB.execute("UPDATE users SET bet_wins=bet_wins+1 WHERE user_id=?", (winner,))
+                DB.execute("UPDATE users SET bet_losses=bet_losses+1 WHERE user_id=?", (loser,))
                 DB.execute("INSERT INTO score_history (user_id, chat_id, points, timestamp) VALUES (?, ?, ?, ?)", (winner, chat_id, win_reward, now))
                 DB.execute("INSERT INTO score_history (user_id, chat_id, points, timestamp) VALUES (?, ?, ?, ?)", (loser, chat_id, loser_cashback, now))
                 DB.commit()
@@ -291,7 +320,7 @@ async def finish_fight(client: Client, chat_id: int):
                 end_buttons = [
                     [
                         types.RichMessageButton(
-                            text=f"🔁 25% Comeback Re-Bet ({rebet_stake} pts) + 100 Bonus",
+                            text=f"🔁 25% Comeback Re-Bet ({rebet_stake} Stars) + 100 Bonus",
                             style=enums.ButtonStyle.SUCCESS,
                             callback_data="rebet_challenge",
                         )
@@ -299,15 +328,14 @@ async def finish_fight(client: Client, chat_id: int):
                 ]
                 result_caption = (
                     "<blockquote>💰 <u><b>𝐉𝐔𝐌𝐁𝐋𝐄 𝐁𝐄𝐓 𝐅𝐈𝐆𝐇𝐓 𝐎𝐕𝐄𝐑!</b></u></blockquote>\n\n"
-                    f"<blockquote>🏆 <b>Winner (75%) :</b> {game['mentions'][winner]} (+{win_reward} pts)\n"
-                    f"🛡️ <b>Loser Cashback (25%) :</b> {game['mentions'][loser]} (+{loser_cashback} pts)</blockquote>\n\n"
+                    f"<blockquote>🏆 <b>Winner (75%) :</b> {game['mentions'][winner]} (+{win_reward} Stars)\n"
+                    f"🛡️ <b>Loser Cashback (25%) :</b> {game['mentions'][loser]} (+{loser_cashback} Stars)</blockquote>\n\n"
                     "<blockquote><i>Loser can tap button below to trigger Comeback Duel!</i></blockquote>"
                 )
         else:
-            DB.execute("UPDATE users SET points=points+?, stars=stars+? WHERE user_id=?", (bet_amt, bet_amt, p1))
-            DB.execute("UPDATE users SET points=points+?, stars=stars+? WHERE user_id=?", (bet_amt, bet_amt, p2))
-            DB.commit()
-            result_caption = f"<blockquote>🤝 <b>BET DRAW! Refunded {bet_amt} points each.</b></blockquote>"
+            add_user_stars(p1, bet_amt)
+            add_user_stars(p2, bet_amt)
+            result_caption = f"<blockquote>🤝 <b>BET DRAW! Refunded {bet_amt} Stars each.</b></blockquote>"
 
     await send_jumble_rich(client, chat_id, result_caption, end_buttons)
     if not (is_bet and winner and not is_rebet):
@@ -315,30 +343,57 @@ async def finish_fight(client: Client, chat_id: int):
 
 
 # ============================================================
-# COMMANDS & INVITATION ROUTER
+# COMMANDS & INVITATION ROUTER (STRICT VALIDATION)
 # ============================================================
 
-@Client.on_message(filters.command(["jumblefight", "fight"]) & filters.group, group=0)
-async def jumble_fight_cmd(client: Client, message: Message):
+async def resolve_group_target_user(client: Client, message: Message):
     target_user = None
     if message.reply_to_message and message.reply_to_message.from_user:
         target_user = message.reply_to_message.from_user
-    elif len(message.command) >= 2:
-        arg = message.command[1]
-        try:
-            target_user = await client.get_users(int(arg) if arg.isdigit() else arg)
-        except Exception:
-            return await message.reply_text("User nahi mila.")
+    else:
+        for arg in message.command[1:]:
+            clean_arg = arg.strip()
+            if clean_arg.startswith("@") or clean_arg.isdigit():
+                try:
+                    target_user = await client.get_users(int(clean_arg) if clean_arg.isdigit() else clean_arg)
+                    break
+                except Exception:
+                    pass
 
-    if not target_user or target_user.id == message.from_user.id or target_user.is_bot:
-        return await message.reply_text("Valid human user ko target karein.")
+    if not target_user:
+        return None, "❌ Target player mention ya reply karke tag karein!"
+
+    # 1. Khud se fight nahi ho sakti
+    if target_user.id == message.from_user.id:
+        return None, "❌ Aap khud ke sath fight/bet nahi laga sakte!"
+
+    # 2. Bot ke sath fight nahi ho sakti
+    if target_user.is_bot:
+        return None, "❌ Bot ke sath fight/bet allowed nahi hai!"
+
+    # 3. User is group me hona chahiye
+    try:
+        chat_member = await client.get_chat_member(message.chat.id, target_user.id)
+        if chat_member.status in (enums.ChatMemberStatus.BANNED, enums.ChatMemberStatus.LEFT):
+            return None, "❌ Target player is group ka active member nahi hai!"
+    except Exception:
+        return None, "❌ Yeh player is group me present nahi hai!"
+
+    return target_user, None
+
+
+@Client.on_message(filters.command(["jumblefight", "fight"]) & filters.group, group=0)
+async def jumble_fight_cmd(client: Client, message: Message):
+    target_user, err = await resolve_group_target_user(client, message)
+    if err:
+        return await message.reply_text(err)
 
     ensure_user(message.from_user)
     ensure_user(target_user)
 
     key = message.chat.id
     if key in ACTIVE_FIGHTS:
-        return await message.reply_text("Fight already running.")
+        return await message.reply_text("❌ Is group me fight already chal rahi hai.")
 
     m1 = get_mention(message.from_user)
     m2 = get_mention(target_user)
@@ -363,38 +418,31 @@ async def jumble_fight_cmd(client: Client, message: Message):
 
 @Client.on_message(filters.command(["jumblebetfight", "betfight"]) & filters.group, group=0)
 async def bet_fight_cmd(client: Client, message: Message):
-    parts = message.command[1:]
-    target_user = None
-    if message.reply_to_message and message.reply_to_message.from_user:
-        target_user = message.reply_to_message.from_user
+    target_user, err = await resolve_group_target_user(client, message)
+    if err:
+        return await message.reply_text(err)
 
     amount = 0
     diff = "medium"
-    for p in parts:
+    for p in message.command[1:]:
         if p.isdigit() and int(p) >= 100:
             amount = int(p)
         elif p.lower() in ("easy", "medium", "hard"):
             diff = p.lower()
-        elif p.startswith("@") and not target_user:
-            try:
-                target_user = await client.get_users(p)
-            except Exception:
-                pass
 
-    if not target_user or amount < 100:
-        return await message.reply_text("Usage: <code>/betfight easy 500 @username</code> (Min: 100 pts)")
+    if amount < 100:
+        return await message.reply_text("❌ Minimum bet 100 Stars hai!\nExample: <code>/betfight easy 200 @username</code>")
 
     ensure_user(message.from_user)
     ensure_user(target_user)
-    u1, u2 = get_user(message.from_user.id), get_user(target_user.id)
-    u1_dict = dict(u1) if u1 else {}
-    u2_dict = dict(u2) if u2 else {}
 
-    points1 = u1_dict.get("stars", 0) if u1_dict.get("stars", 0) > 0 else u1_dict.get("points", 0)
-    points2 = u2_dict.get("stars", 0) if u2_dict.get("stars", 0) > 0 else u2_dict.get("points", 0)
+    bal1 = get_user_balance(message.from_user.id)
+    bal2 = get_user_balance(target_user.id)
 
-    if points1 < amount or points2 < amount:
-        return await message.reply_text("Dono players ke paas bet ke barabar points/stars hone chahiye.")
+    if bal1 < amount:
+        return await message.reply_text(f"❌ Aapke paas kaafi Stars nahi hain! Current Balance: {bal1}")
+    if bal2 < amount:
+        return await message.reply_text(f"❌ {target_user.first_name} ke paas {amount} Stars nahi hain! Uska Balance: {bal2}")
 
     m1, m2 = get_mention(message.from_user), get_mention(target_user)
     FIGHT_LOBBY[message.chat.id] = {
@@ -439,6 +487,7 @@ async def fight_chat_answer_listener(client: Client, message: Message):
             return
 
         if message.text.strip().lower() == game["word"].strip().lower():
+            # Turant state update & timer cancellation
             game["is_solved"] = True
             game["is_advancing"] = True
 
@@ -457,12 +506,13 @@ async def fight_chat_answer_listener(client: Client, message: Message):
                 f"<blockquote>🎯 <b>ROUND {game['round']} SOLVED!</b>\n\n"
                 f"👤 <b>Point Scorer :</b> {game['mentions'][user_id]}\n"
                 f"✅ <b>Word was :</b> <code>{game['word'].upper()}</code>\n"
-                f"🔄 <i>Next round in 2 seconds...</i></blockquote>"
+                f"🔄 <i>Next round in 1 second...</i></blockquote>"
             )
             if s.get("auto_delete") and win_msg:
                 asyncio.create_task(delete_after(win_msg, 3))
 
-    await asyncio.sleep(2)
+    # Correct answer aane par haal ki haal 1 second me agla round
+    await asyncio.sleep(1)
     await fight_next(client, chat_id)
 
 
@@ -510,10 +560,9 @@ async def fight_callbacks_router(client: Client, query: CallbackQuery):
         if user_id != rebet["original_loser"]:
             return await query.answer("Sirf loser hi comeback challenge bhej sakta hai!", show_alert=True)
 
-        loser_u = dict(get_user(user_id))
-        pts = loser_u.get("stars", 0) if loser_u.get("stars", 0) > 0 else loser_u.get("points", 0)
-        if pts < rebet["rebet_amount"]:
-            return await query.answer("Balance kam hai re-bet ke liye!", show_alert=True)
+        bal = get_user_balance(user_id)
+        if bal < rebet["rebet_amount"]:
+            return await query.answer(f"Stars balance kam hai! Required: {rebet['rebet_amount']}", show_alert=True)
 
         await query.answer("Comeback Request Sent! Waiting for Winner to accept...")
 
@@ -521,7 +570,7 @@ async def fight_callbacks_router(client: Client, query: CallbackQuery):
             "<blockquote>🔥 <u><b>COMEBACK RE-BET DUEL OFFERED!</b></u></blockquote>\n\n"
             f"<blockquote>👤 <b>Challenger (Loser):</b> {rebet['loser_mention']}\n"
             f"👑 <b>Target (Winner):</b> {rebet['winner_mention']}\n"
-            f"💵 <b>Stake :</b> <code>{rebet['rebet_amount']} pts</code> (+100 Bonus Pot)\n"
+            f"💵 <b>Stake :</b> <code>{rebet['rebet_amount']} Stars</code> (+100 Bonus Pot)\n"
             f"🏆 <b>Rounds :</b> <code>10 Rounds</code></blockquote>\n\n"
             f"<blockquote>⚠️ {rebet['winner_mention']}, kya aap yeh challenge accept karte hain?</blockquote>"
         )
@@ -550,16 +599,17 @@ async def fight_callbacks_router(client: Client, query: CallbackQuery):
         if user_id != rebet["original_winner"]:
             return await query.answer("Sirf winner hi challenge accept kar sakta hai!", show_alert=True)
 
-        winner_u = dict(get_user(user_id))
-        pts = winner_u.get("stars", 0) if winner_u.get("stars", 0) > 0 else winner_u.get("points", 0)
-        if pts < rebet["rebet_amount"]:
-            return await query.answer("Aapka balance kam hai!", show_alert=True)
+        p1_bal = get_user_balance(rebet["original_winner"])
+        p2_bal = get_user_balance(rebet["original_loser"])
+        req_amt = rebet["rebet_amount"]
 
-        DB.execute("UPDATE users SET points=points-?, stars=stars-? WHERE user_id=?", (rebet["rebet_amount"], rebet["rebet_amount"], rebet["original_winner"]))
-        DB.execute("UPDATE users SET points=points-?, stars=stars-? WHERE user_id=?", (rebet["rebet_amount"], rebet["rebet_amount"], rebet["original_loser"]))
-        DB.commit()
+        if p1_bal < req_amt or p2_bal < req_amt:
+            return await query.answer("Kisi ek player ke paas sufficient stars nahi hain!", show_alert=True)
 
-        # Kill ongoing normal puzzle
+        # Stars deduct on accept
+        deduct_user_stars(rebet["original_winner"], req_amt)
+        deduct_user_stars(rebet["original_loser"], req_amt)
+
         old_g = DB.execute("SELECT message_id FROM games WHERE chat_id=?", (chat_id,)).fetchone()
         if old_g and old_g["message_id"]:
             asyncio.create_task(safe_delete_and_unpin(client, chat_id, old_g["message_id"]))
@@ -583,11 +633,11 @@ async def fight_callbacks_router(client: Client, query: CallbackQuery):
             "timer": rebet["timer"],
             "msg_id": None,
             "is_bet": True,
-            "bet_amount": rebet["rebet_amount"],
+            "bet_amount": req_amt,
             "is_rebet": True,
         }
         del REBET_LOBBY[chat_id]
-        await query.answer("Comeback Duel Accepted! Starting...")
+        await query.answer(f"Comeback Duel Accepted! {req_amt} Stars Deducted.")
         await query.message.delete()
         await fight_next(client, chat_id)
         return
@@ -613,12 +663,17 @@ async def fight_callbacks_router(client: Client, query: CallbackQuery):
         if user_id != lobby["p2"]:
             return await query.answer("Sirf challenged player accept kar sakta hai!", show_alert=True)
 
+        # Bet balance verification and instant deduction
         if lobby["is_bet"]:
-            DB.execute("UPDATE users SET points=points-?, stars=stars-? WHERE user_id=?", (lobby["bet_amount"], lobby["bet_amount"], lobby["p1"]))
-            DB.execute("UPDATE users SET points=points-?, stars=stars-? WHERE user_id=?", (lobby["bet_amount"], lobby["bet_amount"], lobby["p2"]))
-            DB.commit()
+            amt = lobby["bet_amount"]
+            b1 = get_user_balance(lobby["p1"])
+            b2 = get_user_balance(lobby["p2"])
+            if b1 < amt or b2 < amt:
+                return await query.answer(f"Balance check failed! Dono ke paas {amt} Stars hone chahiye.", show_alert=True)
 
-        # Kill ongoing normal puzzle so it won't clash
+            deduct_user_stars(lobby["p1"], amt)
+            deduct_user_stars(lobby["p2"], amt)
+
         old_g = DB.execute("SELECT message_id FROM games WHERE chat_id=?", (chat_id,)).fetchone()
         if old_g and old_g["message_id"]:
             asyncio.create_task(safe_delete_and_unpin(client, chat_id, old_g["message_id"]))
@@ -646,7 +701,8 @@ async def fight_callbacks_router(client: Client, query: CallbackQuery):
             "is_rebet": False,
         }
         del FIGHT_LOBBY[chat_id]
-        await query.answer("Duel Accepted! Starting Round 1...")
+        status_txt = f"Duel Accepted! {lobby['bet_amount']} Stars deducted." if lobby["is_bet"] else "Duel Accepted! Starting..."
+        await query.answer(status_txt)
         await query.message.delete()
         await fight_next(client, chat_id)
         return
