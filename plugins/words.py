@@ -40,9 +40,9 @@ def build_words_page(difficulty: str, page: int = 1):
     nav_row = []
     if page > 1:
         nav_row.append(types.RichMessageButton(text="◀️ Prev", style=enums.ButtonStyle.PRIMARY, callback_data=f"wpage|{difficulty}|{page - 1}"))
-    
+
     nav_row.append(types.RichMessageButton(text=f"📄 {page}/{total_pages}", style=enums.ButtonStyle.DEFAULT, callback_data="noop"))
-    
+
     if page < total_pages:
         nav_row.append(types.RichMessageButton(text="Next ▶️", style=enums.ButtonStyle.PRIMARY, callback_data=f"wpage|{difficulty}|{page + 1}"))
 
@@ -60,7 +60,8 @@ def build_words_page(difficulty: str, page: int = 1):
     return caption, buttons
 
 
-@Client.on_message(filters.command(["word", "words", "wordbank"]))
+# Yahan se "word" aur "words" hata diya gaya hai taaki collision na ho
+@Client.on_message(filters.command(["wordbank", "wordsbank", "jumblewords"]) & filters.group, group=0)
 async def words_panel_cmd(client: Client, message: Message):
     if not await is_admin_or_owner(message.chat, message.from_user.id):
         return await message.reply_text("❌ Only Owner/Admin can view word database.")
