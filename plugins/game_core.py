@@ -3,7 +3,7 @@ import os
 import random
 import time
 from database import DB, get_settings, get_global_config, ensure_user
-from helpers import safe_delete_and_unpin, delete_after, is_admin_or_owner
+from helpers import safe_delete_and_unpin, delete_after, is_admin_or_owner, is_owner, is_authed
 from image_gen import make_puzzle_image
 from pyrogram import Client, filters, enums, types
 from pyrogram.types import CallbackQuery, Message
@@ -11,6 +11,28 @@ from word_bank import choose_word, jumble_word
 from utils.rich import html_to_rich_blocks
 
 ACTIVE_FIGHTS = {}
+
+
+async def check_admin_safe(chat, user_id: int) -> bool:
+    if is_owner(user_id) or is_authed(user_id):
+        return True
+    try:
+        res = await is_admin_or_owner(chat, user_id)
+        if res is not None:
+            return bool(res)
+    except TypeError:
+        try:
+            return bool(await is_admin_or_owner(chat.id, user_id))
+        except Exception:
+            pass
+    except Exception:
+        pass
+
+    try:
+        member = await chat.get_member(user_id)
+        return member.status in (enums.ChatMemberStatus.OWNER, enums.ChatMemberStatus.ADMINISTRATOR)
+    except Exception:
+        return False
 
 
 def rich_game_buttons(puzzle_id: int):
@@ -72,11 +94,10 @@ async def start_game(client: Client, chat_id: int, difficulty: str, message_or_c
     """, (chat_id, difficulty, word, puzzle_id, now, expires, 0))
     DB.commit()
 
-    # Image generator ab standard path return karega
     image_obj = make_puzzle_image(jumbled, difficulty, puzzle_id)
 
     caption_html = (
-        f"<blockquote>🧩 <u><b>𝐉𝐔𝐌𝐁𝐋𝐄 #{puzzle_id}</b></u></blockquote>\n\n"
+        f"<blockquote>🧩 <u><b>JUMBLE #{puzzle_id}</b></u></blockquote>\n\n"
         f"<blockquote>🎯 <b>Difficulty :</b> <code>{difficulty.title()}</code>\n"
         f"⏱️ <b>Time :</b> <code>{timer_val // 60}m {timer_val % 60}s</code>\n"
         f"⭐ <b>Reward :</b> <code>+{reward_pts} Points</code>\n"
@@ -163,10 +184,17 @@ async def expire_game(client: Client, chat_id: int, puzzle_id: int, expires: flo
 
 
 # ============================================================
-# SOLVE DETECTOR (2x Boosters, Timeframe Tracking & Fast Spawning)
+# SOLVE DETECTOR (Explicit command exclusions & group=2)
 # ============================================================
 
-@Client.on_message(filters.text & filters.group, group=1)
+EXCLUDED_COMMANDS = [
+    "settings", "setting", "jumblesettings", "stats", "stat", 
+    "mystats", "leaderboard", "lb", "top", "shop", "powershop", 
+    "fight", "jumblefight", "betfight", "jumblebetfight", 
+    "word", "words", "bonus", "daily", "setdaily", "setbonus"
+]
+
+@Client.on_message(filters.text & filters.group & ~filters.command(EXCLUDED_COMMANDS), group=2)
 async def check_answer_handler(client: Client, message: Message):
     if not message.text or message.text.startswith("/"):
         return
@@ -193,7 +221,6 @@ async def check_answer_handler(client: Client, message: Message):
         base_pts = int(get_global_config(f"points_{diff}", 10))
         base_exp = int(get_global_config(f"exp_{diff}", 15))
 
-        # Check Active Power-up Boosters
         now = time.time()
         active_powers = DB.execute(
             "SELECT power_type FROM user_powers WHERE user_id=? AND expires_at > ?",
@@ -207,7 +234,6 @@ async def check_answer_handler(client: Client, message: Message):
         reward_pts = base_pts * 2 if has_2x_stars else base_pts
         reward_exp = base_exp * 2 if has_2x_exp else base_exp
 
-        # User stats update
         diff_col = f"{diff}_solved"
         DB.execute(f"""
             UPDATE users SET 
@@ -221,7 +247,6 @@ async def check_answer_handler(client: Client, message: Message):
             WHERE user_id = ?
         """, (reward_pts, reward_pts, reward_exp, user.id))
 
-        # Timeframe Solve History for 24h, 1wk, 1mo, 1yr Leaderboard
         DB.execute(
             "INSERT INTO solve_history (user_id, chat_id, points, timestamp) VALUES (?, ?, ?, ?)",
             (user.id, chat_id, reward_pts, now)
@@ -316,9 +341,9 @@ async def puzzle_buttons_listener(client: Client, query: CallbackQuery):
         letter = word[idx].upper()
         return await query.answer(f"💡 Letter #{idx + 1} is: '{letter}' ({hint_limit - hints_used} hints left)", show_alert=True)
 
-    # 2. SKIP (Admins / Owner Only)
+    # 2. SKIP (Admins / Owner Only with Safe Fallback Check)
     elif action in ["game_skip", "skip"]:
-        is_adm = await is_admin_or_owner(query.message.chat, user_id)
+        is_adm = await check_admin_safe(query.message.chat, user_id)
         if not is_adm:
             return await query.answer("❌ Sirf Group Admins hi puzzle skip kar sakte hain!", show_alert=True)
 
