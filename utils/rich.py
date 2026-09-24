@@ -1,5 +1,7 @@
 import math
+import os
 import re
+import traceback
 from pyrogram import enums, types
 
 _TAG_RE = re.compile(
@@ -88,7 +90,6 @@ def html_to_rich_blocks(caption_html: str):
         inner_content = match.group(2).strip()
         is_expandable = "expandable" in open_tag
 
-        inner_items = []
         sub_paragraphs = []
         for line in inner_content.split("\n"):
             line_clean = line.strip()
@@ -96,28 +97,17 @@ def html_to_rich_blocks(caption_html: str):
                 parsed = _parse_inline(line_clean)
                 if parsed:
                     sub_paragraphs.append(types.InputRichBlockParagraph(text=parsed))
-                    if isinstance(parsed, list):
-                        inner_items.extend(parsed)
-                    else:
-                        inner_items.append(parsed)
-                    inner_items.append("\n")
-
-        if inner_items and inner_items[-1] == "\n":
-            inner_items.pop()
 
         if is_expandable and hasattr(types, "InputRichBlockExpandableBlockQuotation"):
             try:
-                blocks.append(types.InputRichBlockExpandableBlockQuotation(text=inner_items))
-            except TypeError:
                 blocks.append(types.InputRichBlockExpandableBlockQuotation(blocks=sub_paragraphs))
+            except Exception:
+                blocks.extend(sub_paragraphs)
         else:
             try:
                 blocks.append(types.InputRichBlockBlockQuotation(blocks=sub_paragraphs))
-            except TypeError:
-                try:
-                    blocks.append(types.InputRichBlockBlockQuotation(text=inner_items))
-                except Exception:
-                    blocks.extend(sub_paragraphs)
+            except Exception:
+                blocks.extend(sub_paragraphs)
 
         last_idx = end
 
@@ -158,7 +148,7 @@ def make_exp_slider_row(curr_exp: int, max_exp: int = 500):
 
     slider_text = f"{curr_exp} EXP  {bar}  {max_exp} EXP"
     btn_style = getattr(enums.ButtonStyle, "DANGER", getattr(enums.ButtonStyle, "DEFAULT", None))
-    
+
     return types.InputRichBlockButtons(
         buttons=[
             types.RichMessageButton(
@@ -172,19 +162,58 @@ def make_exp_slider_row(curr_exp: int, max_exp: int = 500):
 async def send_jumble_rich(client, chat_id: int, caption_html: str, rich_buttons_rows: list = None, slider_row=None, photo=None):
     blocks = []
     if photo:
-        blocks.append(types.InputRichBlockPhoto(photo=types.InputMediaPhoto(photo)))
+        if isinstance(photo, str) and os.path.isfile(photo):
+            blocks.append(types.InputRichBlockPhoto(photo=types.InputMediaPhoto(photo)))
+        elif hasattr(photo, "read"):
+            tmp_p = f"cache/tmp_{int(math.floor(photo.tell() if hasattr(photo, 'tell') else 1))}.png"
+            os.makedirs("cache", exist_ok=True)
+            with open(tmp_p, "wb") as f:
+                f.write(photo.read())
+            blocks.append(types.InputRichBlockPhoto(photo=types.InputMediaPhoto(tmp_p)))
 
     blocks.extend(html_to_rich_blocks(caption_html))
     if slider_row:
         blocks.append(slider_row)
     if rich_buttons_rows:
         for row in rich_buttons_rows:
-            blocks.append(types.InputRichBlockButtons(buttons=row))
+            if isinstance(row, types.InputRichBlockButtons):
+                blocks.append(row)
+            elif isinstance(row, list):
+                blocks.append(types.InputRichBlockButtons(buttons=row))
 
-    return await client.send_rich_message(
-        chat_id=chat_id,
-        rich_message=types.InputRichMessage(blocks=blocks),
-    )
+    try:
+        if hasattr(client, "send_rich_message"):
+            return await client.send_rich_message(
+                chat_id=chat_id,
+                rich_message=types.InputRichMessage(blocks=blocks),
+            )
+        else:
+            return await client.send_message(
+                chat_id=chat_id,
+                text="",
+                rich_message=types.InputRichMessage(blocks=blocks)
+            )
+    except Exception as e:
+        print(f"[send_jumble_rich Fail]: {e}")
+        traceback.print_exc()
+
+        # Fallback to standard InlineKeyboard format if Rich fails
+        ikm_rows = []
+        if rich_buttons_rows:
+            for r in rich_buttons_rows:
+                row_btns = []
+                btns_list = r.buttons if isinstance(r, types.InputRichBlockButtons) else r
+                for b in btns_list:
+                    if hasattr(b, "url") and b.url:
+                        row_btns.append(types.InlineKeyboardButton(text=b.text, url=b.url))
+                    else:
+                        row_btns.append(types.InlineKeyboardButton(text=b.text, callback_data=b.callback_data))
+                ikm_rows.append(row_btns)
+
+        reply_markup = types.InlineKeyboardMarkup(ikm_rows) if ikm_rows else None
+        if photo and os.path.isfile(str(photo)):
+            return await client.send_photo(chat_id=chat_id, photo=photo, caption=caption_html, parse_mode=enums.ParseMode.HTML, reply_markup=reply_markup)
+        return await client.send_message(chat_id=chat_id, text=caption_html, parse_mode=enums.ParseMode.HTML, reply_markup=reply_markup)
 
 async def edit_jumble_rich(client, chat_id: int, message_id: int, caption_html: str, rich_buttons_rows: list = None, slider_row=None):
     blocks = html_to_rich_blocks(caption_html)
@@ -192,9 +221,11 @@ async def edit_jumble_rich(client, chat_id: int, message_id: int, caption_html: 
         blocks.append(slider_row)
     if rich_buttons_rows:
         for row in rich_buttons_rows:
-            blocks.append(types.InputRichBlockButtons(buttons=row))
+            if isinstance(row, types.InputRichBlockButtons):
+                blocks.append(row)
+            elif isinstance(row, list):
+                blocks.append(types.InputRichBlockButtons(buttons=row))
 
-    # Kurigram Native Rich Edit Call
     try:
         return await client.edit_message_text(
             chat_id=chat_id,
@@ -202,13 +233,9 @@ async def edit_jumble_rich(client, chat_id: int, message_id: int, caption_html: 
             text="",
             rich_message=types.InputRichMessage(blocks=blocks)
         )
-    except Exception:
-        # Fallback by re-sending if Telegram denies editing rich layout
+    except Exception as e:
         try:
             await client.delete_messages(chat_id, message_id)
         except Exception:
             pass
-        return await client.send_rich_message(
-            chat_id=chat_id,
-            rich_message=types.InputRichMessage(blocks=blocks)
-        )
+        return await send_jumble_rich(client, chat_id, caption_html, rich_buttons_rows, slider_row)
