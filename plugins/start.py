@@ -11,20 +11,32 @@ LOCAL_BANNER_PATH = "cache/start_banner.jpg"
 
 
 def get_cached_banner():
-    if os.path.isfile(LOCAL_BANNER_PATH):
+    # File exist karti ho aur khali (0 bytes) na ho
+    if os.path.isfile(LOCAL_BANNER_PATH) and os.path.getsize(LOCAL_BANNER_PATH) > 1000:
         return LOCAL_BANNER_PATH
+
     try:
         os.makedirs("cache", exist_ok=True)
+        # Purani zero-byte corrupt file hatao agar ho
+        if os.path.isfile(LOCAL_BANNER_PATH):
+            os.remove(LOCAL_BANNER_PATH)
+
         req = urllib.request.Request(
             START_BANNER_URL,
-            headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
+            headers={
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+            }
         )
-        with urllib.request.urlopen(req) as resp, open(LOCAL_BANNER_PATH, "wb") as f:
+        with urllib.request.urlopen(req, timeout=10) as resp, open(LOCAL_BANNER_PATH, "wb") as f:
             f.write(resp.read())
-        return LOCAL_BANNER_PATH
+
+        if os.path.isfile(LOCAL_BANNER_PATH) and os.path.getsize(LOCAL_BANNER_PATH) > 1000:
+            return LOCAL_BANNER_PATH
     except Exception as e:
         print(f"[Banner Download Error]: {e}")
-        return None
+
+    # Agar local cache fail ho toh direct URL pass karo fallback ke liye
+    return START_BANNER_URL
 
 
 @Client.on_message(filters.command("start") & filters.private)
