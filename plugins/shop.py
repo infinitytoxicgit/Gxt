@@ -44,7 +44,7 @@ def build_shop_card(user_id: int, user_obj):
         "<blockquote>⚡ <b>ACTIVE BOOSTERS :</b>\n"
         f"⭐ <b>2x Stars Booster :</b> {stars_status}\n"
         f"⚡ <b>2x EXP Booster :</b> {exp_status}</blockquote>\n\n"
-        "<i>Click below buttons to purchase or rebuy!</i>"
+        "<blockquote><i>Tap below to purchase or rebuy to stack booster validity!</i></blockquote>"
     )
 
     buttons = [
@@ -78,7 +78,7 @@ def build_shop_card(user_id: int, user_obj):
     return caption, buttons
 
 
-# Command: /shop (Works in both Group and DM)
+# /shop Command (Works in Groups & DMs)
 @Client.on_message(filters.command(["shop", "powershop"]))
 async def open_shop_cmd(client: Client, message: Message):
     ensure_user(message.from_user)
@@ -86,13 +86,14 @@ async def open_shop_cmd(client: Client, message: Message):
     await send_jumble_rich(client, message.chat.id, caption, buttons)
 
 
-@Client.on_callback_query(filters.regex(r"^(buy_shop|buy_power|shop_refresh|shop_close)"))
+@Client.on_callback_query(filters.regex(r"^(buy_shop|buy_power|shop_refresh|shop_close|open_shop_direct)"))
 async def shop_callback_handler(client: Client, query: CallbackQuery):
     data = query.data.split("|")
     action = data[0]
     user_id = query.from_user.id
 
-    if action in ["buy_shop", "shop_refresh"]:
+    if action in ["buy_shop", "shop_refresh", "open_shop_direct"]:
+        ensure_user(query.from_user)
         caption, buttons = build_shop_card(user_id, query.from_user)
         await query.answer()
         return await edit_jumble_rich(client, query.message.chat.id, query.message.id, caption, buttons)
