@@ -164,7 +164,7 @@ async def expire_game(client: Client, chat_id: int, puzzle_id: int, expires: flo
             f"<blockquote>⏰ <u><b>TIME'S UP!</b></u></blockquote>\n\n"
             f"<blockquote>❌ <b>Nobody solved it.</b>\n"
             f"✅ <b>Answer was :</b> <code>{row['word'].upper()}</code>\n\n"
-            f"🔄 <i>Next puzzle starting in 3 seconds...</i></blockquote>"
+            f"🔄 <i>Next puzzle starting in 1 second...</i></blockquote>"
         )
         exp_blocks = html_to_rich_blocks(expire_caption)
         exp_msg = await client.send_rich_message(
@@ -176,7 +176,7 @@ async def expire_game(client: Client, chat_id: int, puzzle_id: int, expires: flo
     except Exception:
         pass
 
-    await asyncio.sleep(3)
+    await asyncio.sleep(1)
     s = dict(get_settings(chat_id)) if get_settings(chat_id) else {}
     if chat_id not in ACTIVE_FIGHTS and s.get("is_active", 1):
         next_diff = s.get("default_diff") or "medium"
@@ -184,14 +184,14 @@ async def expire_game(client: Client, chat_id: int, puzzle_id: int, expires: flo
 
 
 # ============================================================
-# SOLVE DETECTOR (Explicit command exclusions & group=2)
+# SOLVE DETECTOR (2x Boosters & Fast 1-Second Respawn)
 # ============================================================
 
 EXCLUDED_COMMANDS = [
     "settings", "setting", "jumblesettings", "stats", "stat", 
     "mystats", "leaderboard", "lb", "top", "shop", "powershop", 
     "fight", "jumblefight", "betfight", "jumblebetfight", 
-    "word", "words", "bonus", "daily", "setdaily", "setbonus"
+    "word", "words", "puzzle", "current", "bonus", "daily", "setdaily", "setbonus"
 ]
 
 @Client.on_message(filters.text & filters.group & ~filters.command(EXCLUDED_COMMANDS), group=2)
@@ -269,7 +269,7 @@ async def check_answer_handler(client: Client, message: Message):
             f"⭐ <b>Stars Earned :</b> <code>+{reward_pts}</code>\n"
             f"⚡ <b>EXP Gained :</b> <code>+{reward_exp}</code>"
             f"{booster_badge}\n\n"
-            f"🔄 <i>Next puzzle starting in 2 seconds...</i></blockquote>"
+            f"🔄 <i>Next puzzle starting in 1 second...</i></blockquote>"
         )
 
         raw_s = get_settings(chat_id)
@@ -283,12 +283,34 @@ async def check_answer_handler(client: Client, message: Message):
             rich_message=types.InputRichMessage(blocks=win_blocks)
         )
         if s.get("auto_delete") and win_msg:
-            asyncio.create_task(delete_after(win_msg, 5))
+            asyncio.create_task(delete_after(win_msg, 4))
 
-        await asyncio.sleep(2)
+        await asyncio.sleep(1)
         if s.get("is_active", 1):
             next_diff = s.get("default_diff") or "medium"
             asyncio.create_task(start_game(client, chat_id, next_diff, chat_id))
+
+
+# ============================================================
+# /word COMMAND HANDLER
+# ============================================================
+
+@Client.on_message(filters.command(["word", "words", "puzzle", "current"]) & filters.group, group=0)
+async def current_word_cmd(client: Client, message: Message):
+    chat_id = message.chat.id
+    game = DB.execute("SELECT * FROM games WHERE chat_id=? AND solved=0", (chat_id,)).fetchone()
+    if not game:
+        return await message.reply_text("❌ Abhi koi active puzzle nahi chal raha. `/jumble` se start karein.")
+
+    left = max(0, int(game["expires"] - time.time()))
+    diff = game["difficulty"]
+    await message.reply_text(
+        f"<blockquote>🧩 <b>ACTIVE JUMBLE PUZZLE</b>\n\n"
+        f"🎯 <b>Difficulty :</b> <code>{diff.title()}</code>\n"
+        f"⏳ <b>Time Left :</b> <code>{left}s</code>\n"
+        f"💡 Check pinned message for puzzle image!</blockquote>",
+        parse_mode=enums.ParseMode.HTML
+    )
 
 
 # ============================================================
@@ -364,7 +386,7 @@ async def puzzle_buttons_listener(client: Client, query: CallbackQuery):
         skip_caption = (
             f"<blockquote>⏭️ <u><b>PUZZLE SKIPPED BY ADMIN!</b></u></blockquote>\n\n"
             f"<blockquote>✅ <b>Word was :</b> <code>{game['word'].upper()}</code>\n"
-            f"🔄 <i>Next puzzle starting in 3 seconds...</i></blockquote>"
+            f"🔄 <i>Next puzzle starting in 1 second...</i></blockquote>"
         )
         exp_blocks = html_to_rich_blocks(skip_caption)
         msg = await client.send_rich_message(
@@ -374,7 +396,7 @@ async def puzzle_buttons_listener(client: Client, query: CallbackQuery):
         if s.get("auto_delete") and msg:
             asyncio.create_task(delete_after(msg, 4))
 
-        await asyncio.sleep(3)
+        await asyncio.sleep(1)
         if s.get("is_active", 1):
             next_diff = s.get("default_diff") or "medium"
             asyncio.create_task(start_game(client, chat_id, next_diff, chat_id))
