@@ -89,11 +89,13 @@ def html_to_rich_blocks(caption_html: str):
         is_expandable = "expandable" in open_tag
 
         inner_items = []
+        sub_paragraphs = []
         for line in inner_content.split("\n"):
             line_clean = line.strip()
             if line_clean:
                 parsed = _parse_inline(line_clean)
                 if parsed:
+                    sub_paragraphs.append(types.InputRichBlockParagraph(text=parsed))
                     if isinstance(parsed, list):
                         inner_items.extend(parsed)
                     else:
@@ -103,11 +105,23 @@ def html_to_rich_blocks(caption_html: str):
         if inner_items and inner_items[-1] == "\n":
             inner_items.pop()
 
-        # Regular Blue Blockquote (Non-expandable) & Expandable both supported
+        # Kurigram signature compatibility:
+        # ExpandableBlockQuotation accepts text=
+        # BlockQuotation accepts blocks= (or text= depending on build)
         if is_expandable and hasattr(types, "InputRichBlockExpandableBlockQuotation"):
-            blocks.append(types.InputRichBlockExpandableBlockQuotation(text=inner_items))
+            try:
+                blocks.append(types.InputRichBlockExpandableBlockQuotation(text=inner_items))
+            except TypeError:
+                blocks.append(types.InputRichBlockExpandableBlockQuotation(blocks=sub_paragraphs))
         else:
-            blocks.append(types.InputRichBlockBlockQuotation(text=inner_items))
+            try:
+                # Primary Kurigram signature for normal blockquote
+                blocks.append(types.InputRichBlockBlockQuotation(blocks=sub_paragraphs))
+            except TypeError:
+                try:
+                    blocks.append(types.InputRichBlockBlockQuotation(text=inner_items))
+                except Exception:
+                    blocks.extend(sub_paragraphs)
 
         last_idx = end
 
