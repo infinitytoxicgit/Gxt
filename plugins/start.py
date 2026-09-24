@@ -1,4 +1,4 @@
-import asyncio
+import os
 from pyrogram import Client, filters, enums, types
 from pyrogram.types import Message
 from database import ensure_user, get_user
