@@ -57,7 +57,14 @@ def init_db():
 
     CREATE TABLE IF NOT EXISTS bot_config (
         key TEXT PRIMARY KEY,
-        value INTEGER
+        value REAL
+    );
+
+    CREATE TABLE IF NOT EXISTS user_powers (
+        user_id INTEGER,
+        power_type TEXT,
+        expires_at REAL,
+        PRIMARY KEY(user_id, power_type)
     );
 
     CREATE TABLE IF NOT EXISTS group_adders (
@@ -132,16 +139,33 @@ def init_db():
     # Purane points ko stars ke sath synchronize karein agar stars 0 hon
     DB.execute("UPDATE users SET stars = points WHERE stars = 0 AND points > 0")
 
+    # EXP, Leveling, Points, Hints aur Power Shop ke Defaults
     defaults = {
+        # EXP & Level Configs
+        "exp_per_level": 500,
+        "exp_easy": 15,
+        "exp_medium": 25,
+        "exp_hard": 40,
+        
+        # Points & Hints Configs
         "points_easy": 10,
         "points_medium": 20,
         "points_hard": 30,
         "hints_easy": 3,
         "hints_medium": 3,
         "hints_hard": 3,
-        "daily_points": 50,
+        
+        # Bonus & Daily
+        "daily_bonus": 100,
+        "daily_points": 100,
         "bonus_points": 100,
         "logging_enabled": 1,
+
+        # Shop 2x Boosters Default Pricing & Durations (in seconds)
+        "shop_stars2x_price": 200,
+        "shop_stars2x_duration": 3600,   # 1 hour
+        "shop_exp2x_price": 250,
+        "shop_exp2x_duration": 3600,     # 1 hour
     }
     for k, v in defaults.items():
         DB.execute("INSERT OR IGNORE INTO bot_config (key, value) VALUES (?, ?)", (k, v))
@@ -151,7 +175,7 @@ def init_db():
 init_db()
 
 
-def get_global_config(key, default_val):
+def get_global_config(key, default_val=0):
     row = DB.execute("SELECT value FROM bot_config WHERE key=?", (key,)).fetchone()
     return row["value"] if row else default_val
 
@@ -213,6 +237,5 @@ def get_top_players(limit=5):
 
 
 async def is_admin(chat_id, user_id):
-    # Auth user check
     row = DB.execute("SELECT * FROM auth_users WHERE user_id=?", (user_id,)).fetchone()
     return bool(row)
