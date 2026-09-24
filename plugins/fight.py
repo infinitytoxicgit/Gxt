@@ -5,7 +5,7 @@ import time
 from collections import defaultdict
 
 from database import DB, get_settings, ensure_user, get_user
-from helpers import LOCK, safe_delete_and_unpin, delete_after, get_mention, is_group, is_admin_or_owner
+from helpers import LOCK, safe_delete_and_unpin, delete_after, get_mention, is_group
 from image_gen import make_puzzle_image
 from plugins.game_core import ACTIVE_FIGHTS, start_game
 from pyrogram import Client, filters, enums, types
@@ -37,7 +37,8 @@ async def fight_timeout_task(client: Client, chat_id: int, round_num: int, timer
         if game and game["round"] == round_num:
             word = game["word"]
             s = get_settings(chat_id)
-            if s["auto_delete"] and game.get("msg_id"):
+            settings_dict = dict(s) if s else {}
+            if settings_dict.get("auto_delete") and game.get("msg_id"):
                 await safe_delete_and_unpin(client, chat_id, game["msg_id"])
             try:
                 caption = (
@@ -47,7 +48,7 @@ async def fight_timeout_task(client: Client, chat_id: int, round_num: int, timer
                     f"<emoji id=5974235702701853774>🔄</emoji> <i>Next round starting immediately...</i></blockquote>"
                 )
                 t_msg = await send_jumble_rich(client, chat_id, caption)
-                if s["auto_delete"] and t_msg:
+                if settings_dict.get("auto_delete") and t_msg:
                     asyncio.create_task(delete_after(t_msg, 4))
             except Exception:
                 pass
@@ -137,7 +138,8 @@ async def finish_fight(client: Client, chat_id: int):
             pass
 
     s = get_settings(chat_id)
-    if s["auto_delete"] and game.get("msg_id"):
+    settings_dict = dict(s) if s else {}
+    if settings_dict.get("auto_delete") and game.get("msg_id"):
         await safe_delete_and_unpin(client, chat_id, game["msg_id"])
 
     p1, p2 = game["players"]
@@ -224,8 +226,8 @@ async def finish_fight(client: Client, chat_id: int):
 
     await send_jumble_rich(client, chat_id, result_caption, end_buttons)
     await asyncio.sleep(3)
-    if s["is_active"]:
-        asyncio.create_task(start_game(client, chat_id, s["default_diff"] or "medium", chat_id))
+    if settings_dict.get("is_active"):
+        asyncio.create_task(start_game(client, chat_id, settings_dict.get("default_diff", "medium"), chat_id))
 
 
 @Client.on_message(filters.command(["jumblefight", "fight"]))
@@ -356,9 +358,11 @@ async def bet_fight_cmd(client: Client, message: Message):
     ensure_user(message.from_user)
     ensure_user(target_user)
     u1, u2 = get_user(message.from_user.id), get_user(target_user.id)
+    u1_dict = dict(u1) if u1 else {}
+    u2_dict = dict(u2) if u2 else {}
 
-    points1 = u1["stars"] if "stars" in u1.keys() and u1["stars"] > 0 else u1["points"]
-    points2 = u2["stars"] if "stars" in u2.keys() and u2["stars"] > 0 else u2["points"]
+    points1 = u1_dict.get("stars", 0) if u1_dict.get("stars", 0) > 0 else u1_dict.get("points", 0)
+    points2 = u2_dict.get("stars", 0) if u2_dict.get("stars", 0) > 0 else u2_dict.get("points", 0)
 
     if points1 < amount or points2 < amount:
         return await message.reply_text("Dono players ke paas bet ke barabar points/stars hone chahiye.")
