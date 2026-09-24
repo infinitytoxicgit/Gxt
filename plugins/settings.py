@@ -1,8 +1,9 @@
+import asyncio
 import traceback
 from pyrogram import Client, filters, enums, types
 from pyrogram.types import Message, CallbackQuery
 from database import DB, get_settings
-from helpers import is_owner, is_authed
+from helpers import is_owner, is_authed, safe_delete_and_unpin
 from utils.rich import send_jumble_rich, edit_jumble_rich
 
 
@@ -140,7 +141,6 @@ def build_timers_card(chat_id: int):
     return caption, buttons
 
 
-# Registered in group=-1 taaki group puzzle messages se pehle execute ho
 @Client.on_message(filters.command(["settings", "setting", "jumblesettings"], prefixes=["/", "!", "."]) & filters.group, group=-1)
 async def settings_cmd(client: Client, message: Message):
     if not message.from_user:
@@ -178,6 +178,11 @@ async def settings_callback_router(client: Client, query: CallbackQuery):
         DB.commit()
         await query.answer(f"Game Status: {'Running' if new_val else 'Stopped'}")
 
+        if new_val == 1:
+            from plugins.game_core import start_game
+            diff = s.get("default_diff") or "medium"
+            asyncio.create_task(start_game(client, chat_id, diff, chat_id))
+
     elif action == "set_toggle_autodel":
         s = dict(get_settings(chat_id))
         new_val = 0 if s.get("auto_delete", 0) else 1
@@ -189,7 +194,13 @@ async def settings_callback_router(client: Client, query: CallbackQuery):
         diff = data[1]
         DB.execute("UPDATE settings SET default_diff=? WHERE chat_id=?", (diff, chat_id))
         DB.commit()
-        await query.answer(f"Mode set to: {diff.upper()}")
+        await query.answer(f"Mode set to: {diff.upper()}! Starting new puzzle...")
+
+        # Purane active puzzle ko clear karke turant naye mode ka word start karo
+        from plugins.game_core import start_game
+        s = dict(get_settings(chat_id))
+        if s.get("is_active", 1):
+            asyncio.create_task(start_game(client, chat_id, diff, chat_id))
 
     elif action == "set_menu_timers":
         caption, buttons = build_timers_card(chat_id)
