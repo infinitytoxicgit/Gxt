@@ -100,6 +100,25 @@ async def safe_delete_and_unpin(client, chat_id: int, message_id: int):
         pass
 
 
+async def safe_pin_and_clean(client, chat_id: int, message_id: int):
+    """
+    Message ko silently pin karta hai aur Telegram ke create kiye hue
+    service notification message ('Bot pinned Photo...') ko turant delete karta hai.
+    """
+    if not message_id:
+        return
+    try:
+        pin_res = await client.pin_chat_message(chat_id, message_id, disable_notification=True)
+        # Agar pin karne par Telegram ne alag service message ID return ki toh use clean karo
+        if pin_res and hasattr(pin_res, "id") and pin_res.id != message_id:
+            try:
+                await client.delete_messages(chat_id, pin_res.id)
+            except Exception:
+                pass
+    except Exception:
+        pass
+
+
 async def send_log_event(client: Client, user, chat, word: str, raw_guess: str, points: int, diff: str):
     if not get_global_config("logging_enabled", 1):
         return
