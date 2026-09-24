@@ -90,8 +90,8 @@ def build_timers_card(chat_id: int):
 
     caption = (
         f"<blockquote>⏱️ <u><b>𝐂𝐇𝐎𝐎𝐒𝐄 𝐑𝐎𝐔𝐍𝐃 𝐓𝐈𝐌𝐄𝐑𝐒 ({cur_diff.upper()})</b></u>\n\n"
-        f"Current Duration: <b>{cur_val}s</b>\n"
-        f"Active timer is <b>Green</b>, others are <b>Red</b>. Tap any to switch:</blockquote>"
+        f"Selected Duration: <b>{cur_val}s</b>\n"
+        f"Active timer is <b>Green</b>, others are <b>Red</b>. Tap to change:</blockquote>"
     )
 
     timer_choices = [30, 45, 60, 90, 120, 180, 300, 600]
@@ -131,7 +131,7 @@ def build_timers_card(chat_id: int):
 @Client.on_message(filters.command(["settings", "setting", "jumblesettings"]))
 async def settings_cmd(client: Client, message: Message):
     if message.chat.type == enums.ChatType.PRIVATE:
-        return await message.reply_text("ℹ️ `/settings` sirf groups me use hota hai jahan bot game conduct karta hai.")
+        return await message.reply_text("ℹ️ `/settings` group ke andar use karein.")
 
     if not await is_admin_or_owner(message.chat, message.from_user.id):
         return await message.reply_text("❌ Sirf Group Admins settings access kar sakte hain.")
@@ -157,7 +157,7 @@ async def settings_callback_router(client: Client, query: CallbackQuery):
         new_val = 0 if s.get("is_active", 1) else 1
         DB.execute("UPDATE settings SET is_active=? WHERE chat_id=?", (new_val, chat_id))
         DB.commit()
-        await query.answer(f"Game set to: {'Running' if new_val else 'Stopped'}")
+        await query.answer(f"Game Status: {'Running' if new_val else 'Stopped'}")
 
     elif action == "set_toggle_autodel":
         s = dict(get_settings(chat_id))
@@ -170,7 +170,7 @@ async def settings_callback_router(client: Client, query: CallbackQuery):
         diff = data[1]
         DB.execute("UPDATE settings SET default_diff=? WHERE chat_id=?", (diff, chat_id))
         DB.commit()
-        await query.answer(f"Mode switched to: {diff.upper()}")
+        await query.answer(f"Mode set to: {diff.upper()}")
 
     elif action == "set_menu_timers":
         caption, buttons = build_timers_card(chat_id)
@@ -182,7 +182,7 @@ async def settings_callback_router(client: Client, query: CallbackQuery):
         secs = int(data[2])
         DB.execute(f"UPDATE settings SET {diff}=? WHERE chat_id=?", (secs, chat_id))
         DB.commit()
-        await query.answer(f"{diff.upper()} timer set to {secs}s!")
+        await query.answer(f"{diff.upper()} Timer: {secs}s!")
         caption, buttons = build_timers_card(chat_id)
         return await edit_jumble_rich(client, chat_id, query.message.id, caption, buttons)
 
