@@ -3,8 +3,8 @@ import io
 import os
 import random
 import time
-from database import DB, get_settings, get_global_config, ensure_user, is_admin
-from helpers import safe_delete_and_unpin, delete_after
+from database import DB, get_settings, get_global_config, ensure_user
+from helpers import safe_delete_and_unpin, delete_after, is_admin_or_owner
 from image_gen import make_puzzle_image
 from pyrogram import Client, filters, enums, types
 from pyrogram.types import CallbackQuery
@@ -26,7 +26,7 @@ def rich_game_buttons(puzzle_id: int):
                 types.RichMessageButton(
                     text="⏭️ 𝐒ᴋɪᴘ",
                     style=enums.ButtonStyle.DANGER,
-                    callback_data="game_skip",
+                    callback_data=f"game_skip|{puzzle_id}",
                 ),
             ]
         ),
@@ -73,29 +73,25 @@ async def start_game(client: Client, chat_id: int, difficulty: str, message_or_c
     """, (chat_id, difficulty, word, puzzle_id, now, expires, 0))
     DB.commit()
 
-    # Image generate karna (File path ya BytesIO)
     image_obj = make_puzzle_image(jumbled, difficulty, puzzle_id)
 
+    # Normal Clean Blockquote (No expandable arrow)
     caption_html = (
-        f"<blockquote><emoji id=5895705279416241926>🧩</emoji> <u><b>𝐉ᴜᴍʙʟᴇ #{puzzle_id}</b></u></blockquote>\n\n"
-        f"<blockquote expandable>"
-        f"<emoji id=6066395745139824604>🎯</emoji> <b>𝐃ɪғғɪᴄᴜʟᴛʏ:</b> <code>{difficulty.title()}</code>\n"
-        f"<emoji id=5974235702701853774>⏱️</emoji> <b>𝐓ɪᴍᴇ:</b> <code>{timer_val // 60}m {timer_val % 60}s</code>\n"
-        f"⭐ <b>𝐑ᴇᴡᴀʀᴅ:</b> <code>+{reward_pts} Points</code>\n"
-        f"<emoji id=5409132617750555920>⚡</emoji> <b>𝐄𝐗𝐏:</b> <code>+{reward_exp} EXP</code>\n"
-        f"💡 <b>𝐇ɪɴᴛs:</b> <code>{hint_limit}/word</code></blockquote>\n\n"
-        f"<blockquote>🔀 <i>𝐔ɴsᴄʀᴀᴍʙʟᴇ ᴛʜᴇ ʟᴇᴛᴛᴇʀs & ᴛʏᴘᴇ ɪɴ ᴄʜᴀᴛ!</i></blockquote>"
+        f"<blockquote>🧩 <b>𝐉ᴜᴍʙʟᴇ #{puzzle_id}</b>\n\n"
+        f"🎯 <b>Difficulty:</b> <code>{difficulty.title()}</code>\n"
+        f"⏱️ <b>Time:</b> <code>{timer_val // 60}m {timer_val % 60}s</code>\n"
+        f"⭐ <b>Reward:</b> <code>+{reward_pts} Points</code>\n"
+        f"⚡ <b>EXP:</b> <code>+{reward_exp} EXP</code>\n"
+        f"💡 <b>Hints:</b> <code>{hint_limit}/word</code></blockquote>\n\n"
+        f"<blockquote>🔀 <i>Unscramble the letters & type in chat!</i></blockquote>"
     )
 
     blocks = []
-    
-    # 1. Photo attach logic (Robust for path and buffer)
     if image_obj:
         try:
             if isinstance(image_obj, str) and os.path.isfile(image_obj):
                 blocks.append(types.InputRichBlockPhoto(photo=types.InputMediaPhoto(image_obj)))
             elif hasattr(image_obj, "read"):
-                # Agar buffer ho toh temporarily save karke block me daalna
                 tmp_path = f"tmp_puzzle_{puzzle_id}.png"
                 if hasattr(image_obj, "seek"):
                     image_obj.seek(0)
@@ -105,7 +101,6 @@ async def start_game(client: Client, chat_id: int, difficulty: str, message_or_c
         except Exception as err:
             print(f"Photo Block Error: {err}")
 
-    # 2. Text aur Rich Buttons attach karna
     blocks.extend(html_to_rich_blocks(caption_html))
     blocks.extend(rich_game_buttons(puzzle_id))
 
@@ -114,10 +109,8 @@ async def start_game(client: Client, chat_id: int, difficulty: str, message_or_c
             chat_id=chat_id,
             rich_message=types.InputRichMessage(blocks=blocks)
         )
-
         DB.execute("UPDATE games SET message_id=? WHERE chat_id=?", (sent.id, chat_id))
         DB.commit()
-
         try:
             await sent.pin(disable_notification=True)
         except Exception:
@@ -147,11 +140,10 @@ async def expire_game(client: Client, chat_id: int, puzzle_id: int, expires: flo
 
     try:
         expire_caption = (
-            f"<blockquote><emoji id=5895705279416241926>⏰</emoji> <u><b>𝐓ɪᴍᴇ's 𝐔ᴘ!</b></u></blockquote>\n\n"
-            f"<blockquote expandable>"
-            f"❌ <b>𝐍ᴏʙᴏᴅʏ sᴏʟᴠᴇᴅ ɪᴛ.</b>\n"
-            f"✅ <b>𝐀ɴsᴡᴇʀ:</b> <code>{row['word'].upper()}</code>\n\n"
-            f"<emoji id=5974235702701853774>🔄</emoji> <i>𝐍ᴇxᴛ ᴘᴜᴢᴢʟᴇ sᴛᴀʀᴛɪɴɢ ɪɴ 3 sᴇᴄᴏɴᴅs...</i></blockquote>"
+            f"<blockquote>⏰ <b>Time's Up!</b>\n\n"
+            f"❌ <b>Nobody solved it.</b>\n"
+            f"✅ <b>Answer was:</b> <code>{row['word'].upper()}</code>\n\n"
+            f"🔄 <i>Next puzzle starting in 3 seconds...</i></blockquote>"
         )
         exp_blocks = html_to_rich_blocks(expire_caption)
         exp_msg = await client.send_rich_message(
@@ -171,17 +163,18 @@ async def expire_game(client: Client, chat_id: int, puzzle_id: int, expires: flo
 
 
 # ============================================================
-# BUTTON CALLBACK HANDLERS (HINT, SKIP, NEW WORD)
+# GAME BUTTON CALLBACKS (HINT / SKIP / NEW WORD)
 # ============================================================
 
 @Client.on_callback_query(filters.regex(r"^(game_hint|game_skip|game_newword|hint|skip|newword)"))
 async def puzzle_buttons_listener(client: Client, query: CallbackQuery):
     chat_id = query.message.chat.id
     user_id = query.from_user.id
-    data = query.data
+    data = query.data.split("|")
+    action = data[0]
 
-    # 1. HINT BUTTON
-    if data.startswith("game_hint") or data == "hint":
+    # 1. HINT
+    if action in ["game_hint", "hint"]:
         ensure_user(query.from_user)
         game = DB.execute("SELECT * FROM games WHERE chat_id=? AND solved=0", (chat_id,)).fetchone()
         if not game:
@@ -197,14 +190,14 @@ async def puzzle_buttons_listener(client: Client, query: CallbackQuery):
         revealed_indices = [int(i) for i in hint_row["revealed_indices"].split(",") if i] if hint_row else []
 
         if hints_used >= hint_limit:
-            return await query.answer(f"❌ Is puzzle ke {hint_limit} hints pure ho chuke hain!", show_alert=True)
+            return await query.answer(f"❌ Is puzzle ke aapke {hint_limit} hints pure ho gaye!", show_alert=True)
 
         avail = [i for i in range(len(word)) if i not in revealed_indices]
         if not avail:
-            return await query.answer("❌ Saare letters already reveal ho chuke hain.", show_alert=True)
+            return await query.answer("❌ Saare letters already open hain!", show_alert=True)
 
-        chosen = random.choice(avail)
-        revealed_indices.append(chosen)
+        idx = random.choice(avail)
+        revealed_indices.append(idx)
         hints_used += 1
 
         DB.execute("""
@@ -216,17 +209,18 @@ async def puzzle_buttons_listener(client: Client, query: CallbackQuery):
         """, (chat_id, puzzle_id, user_id, hints_used, ",".join(map(str, revealed_indices))))
         DB.commit()
 
-        letter = word[chosen].upper()
-        return await query.answer(f"💡 Letter #{chosen + 1} is '{letter}'\nHints Left: {hint_limit - hints_used}/{hint_limit}", show_alert=True)
+        letter = word[idx].upper()
+        return await query.answer(f"💡 Letter #{idx + 1} is: '{letter}' ({hint_limit - hints_used} hints left)", show_alert=True)
 
-    # 2. SKIP BUTTON
-    elif data == "game_skip" or data == "skip":
-        if not await is_admin(chat_id, user_id):
-            return await query.answer("❌ Sirf group admins skip kar sakte hain!", show_alert=True)
+    # 2. SKIP (Admins / Owner Only)
+    elif action in ["game_skip", "skip"]:
+        is_adm = await is_admin_or_owner(query.message.chat, user_id)
+        if not is_adm:
+            return await query.answer("❌ Sirf Group Admins hi puzzle skip kar sakte hain!", show_alert=True)
 
         game = DB.execute("SELECT * FROM games WHERE chat_id=? AND solved=0", (chat_id,)).fetchone()
         if not game:
-            return await query.answer("Active puzzle nahi hai!", show_alert=True)
+            return await query.answer("❌ Koi active puzzle nahi hai!", show_alert=True)
 
         DB.execute("UPDATE games SET solved=1 WHERE chat_id=?", (chat_id,))
         DB.commit()
@@ -236,18 +230,17 @@ async def puzzle_buttons_listener(client: Client, query: CallbackQuery):
         if s.get("auto_delete") and game["message_id"]:
             await safe_delete_and_unpin(client, chat_id, game["message_id"])
 
-        await query.answer("⏭️ Puzzle skipped!")
-        
+        await query.answer("⏭️ Puzzle skipped successfully!")
+
         skip_caption = (
-            f"<blockquote><emoji id=5895705279416241926>⏭️</emoji> <u><b>𝐒ᴋɪᴘᴘᴇᴅ!</b></u></blockquote>\n\n"
-            f"<blockquote expandable>"
-            f"✅ <b>Word was :</b> <code>{game['word'].upper()}</code>\n"
-            f"<emoji id=5974235702701853774>🔄</emoji> <i>Next puzzle starting in 3 seconds...</i></blockquote>"
+            f"<blockquote>⏭️ <b>Puzzle Skipped by Admin!</b>\n\n"
+            f"✅ <b>Word was:</b> <code>{game['word'].upper()}</code>\n"
+            f"🔄 <i>Next puzzle starting in 3 seconds...</i></blockquote>"
         )
-        blocks = html_to_rich_blocks(skip_caption)
+        exp_blocks = html_to_rich_blocks(skip_caption)
         msg = await client.send_rich_message(
             chat_id=chat_id,
-            rich_message=types.InputRichMessage(blocks=blocks)
+            rich_message=types.InputRichMessage(blocks=exp_blocks)
         )
         if s.get("auto_delete") and msg:
             asyncio.create_task(delete_after(msg, 4))
@@ -257,13 +250,13 @@ async def puzzle_buttons_listener(client: Client, query: CallbackQuery):
             next_diff = s.get("default_diff") or "medium"
             asyncio.create_task(start_game(client, chat_id, next_diff, chat_id))
 
-    # 3. NEW WORD BUTTON
-    elif data == "game_newword" or data == "newword":
+    # 3. NEW WORD
+    elif action in ["game_newword", "newword"]:
         game = DB.execute("SELECT * FROM games WHERE chat_id=? AND solved=0", (chat_id,)).fetchone()
         if game and time.time() <= game["expires"]:
-            return await query.answer("❌ Current puzzle abhi active hai, pehle ise solve ya skip karein!", show_alert=True)
+            return await query.answer("❌ Current puzzle chal raha hai! Pehle solve ya skip karein.", show_alert=True)
 
-        await query.answer("🧩 Loading new word...")
+        await query.answer("🧩 Naya puzzle shuru kiya ja raha hai...")
         raw_s = get_settings(chat_id)
         s = dict(raw_s) if raw_s else {}
         next_diff = s.get("default_diff") or "medium"
