@@ -8,6 +8,9 @@ from pyrogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton
 
 LOCK = asyncio.Lock()
 
+# Central shared state across all game loops, plugins, and duel systems
+ACTIVE_FIGHTS = {}
+
 
 def is_owner(user_id):
     try:
