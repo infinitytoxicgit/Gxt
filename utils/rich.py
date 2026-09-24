@@ -169,8 +169,12 @@ def make_exp_slider_row(curr_exp: int, max_exp: int = 500):
         ]
     )
 
-async def send_jumble_rich(client, chat_id: int, caption_html: str, rich_buttons_rows: list = None, slider_row=None):
-    blocks = html_to_rich_blocks(caption_html)
+async def send_jumble_rich(client, chat_id: int, caption_html: str, rich_buttons_rows: list = None, slider_row=None, photo=None):
+    blocks = []
+    if photo:
+        blocks.append(types.InputRichBlockPhoto(photo=types.InputMediaPhoto(photo)))
+
+    blocks.extend(html_to_rich_blocks(caption_html))
     if slider_row:
         blocks.append(slider_row)
     if rich_buttons_rows:
@@ -190,20 +194,21 @@ async def edit_jumble_rich(client, chat_id: int, message_id: int, caption_html: 
         for row in rich_buttons_rows:
             blocks.append(types.InputRichBlockButtons(buttons=row))
 
-    if hasattr(client, "edit_rich_message"):
+    # Kurigram Native Rich Edit Call
+    try:
+        return await client.edit_message_text(
+            chat_id=chat_id,
+            message_id=message_id,
+            text="",
+            rich_message=types.InputRichMessage(blocks=blocks)
+        )
+    except Exception:
+        # Fallback by re-sending if Telegram denies editing rich layout
         try:
-            return await client.edit_rich_message(
-                chat_id=chat_id,
-                message_id=message_id,
-                rich_message=types.InputRichMessage(blocks=blocks)
-            )
+            await client.delete_messages(chat_id, message_id)
         except Exception:
             pass
-
-    # Fallback to standard edit if native rich edit fails
-    return await client.edit_message_text(
-        chat_id=chat_id,
-        message_id=message_id,
-        text=caption_html,
-        parse_mode=enums.ParseMode.HTML
-    )
+        return await client.send_rich_message(
+            chat_id=chat_id,
+            rich_message=types.InputRichMessage(blocks=blocks)
+        )
