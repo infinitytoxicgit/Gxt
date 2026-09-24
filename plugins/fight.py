@@ -9,24 +9,64 @@ from helpers import LOCK, safe_delete_and_unpin, delete_after, get_mention, is_g
 from image_gen import make_puzzle_image
 from plugins.game_core import ACTIVE_FIGHTS, start_game
 from pyrogram import Client, filters, enums, types
-from pyrogram.types import Message
-from utils.rich import send_jumble_rich, html_to_rich_blocks
+from pyrogram.types import Message, CallbackQuery
+from utils.rich import send_jumble_rich, edit_jumble_rich, html_to_rich_blocks
 from word_bank import WORDS, jumble_word
 
 FIGHT_LOBBY = {}
 REBET_LOBBY = {}
 
 
-def fight_rich_buttons():
-    return [
-        [
-            types.RichMessageButton(
-                text="💡 𝐇ɪɴᴛ",
-                style=enums.ButtonStyle.PRIMARY,
-                callback_data="fight_hint",
-            )
-        ]
+def build_fight_lobby_card(lobby_data):
+    m1 = lobby_data["m1"]
+    m2 = lobby_data["m2"]
+    diff = lobby_data["difficulty"]
+    timer = lobby_data["timer"]
+    rounds = lobby_data["total_rounds"]
+    is_bet = lobby_data["is_bet"]
+    amt = lobby_data["bet_amount"]
+
+    header = "💰 <u><b>HIGH STAKES BET FIGHT</b></u>" if is_bet else "⚔️ <u><b>JUMBLE FIGHT INVITATION</b></u>"
+    bet_line = f"💵 <b>Bet Amount :</b> <code>{amt} Points / Stars</code>\n" if is_bet else ""
+
+    caption = (
+        f"<blockquote>{header}</blockquote>\n\n"
+        f"<blockquote>👤 <b>Challenger :</b> {m1}\n"
+        f"🎯 <b>Opponent :</b> {m2}\n"
+        f"{bet_line}"
+        f"🏆 <b>Total Rounds :</b> <code>{rounds} Rounds</code>\n"
+        f"⏱️ <b>Round Timer :</b> <code>{timer}s</code> | <b>Mode:</b> <code>{diff.title()}</code></blockquote>\n\n"
+        "<blockquote><i>Opponent tap Accept Challenge to duel!</i></blockquote>"
+    )
+
+    r_list = [10, 20, 30, 40, 50]
+    rounds_btns = [
+        types.RichMessageButton(
+            text=f"{'🟢' if rounds == r else '🔴'} {r}R",
+            style=enums.ButtonStyle.SUCCESS if rounds == r else enums.ButtonStyle.DANGER,
+            callback_data=f"f_set_r|{r}",
+        )
+        for r in r_list
     ]
+
+    buttons = [
+        [
+            types.RichMessageButton(text="🟢 Easy" if diff == "easy" else "🔴 Easy", style=enums.ButtonStyle.SUCCESS if diff == "easy" else enums.ButtonStyle.DANGER, callback_data="f_diff|easy"),
+            types.RichMessageButton(text="🟢 Med" if diff == "medium" else "🔴 Med", style=enums.ButtonStyle.SUCCESS if diff == "medium" else enums.ButtonStyle.DANGER, callback_data="f_diff|medium"),
+            types.RichMessageButton(text="🟢 Hard" if diff == "hard" else "🔴 Hard", style=enums.ButtonStyle.SUCCESS if diff == "hard" else enums.ButtonStyle.DANGER, callback_data="f_diff|hard"),
+        ],
+        [
+            types.RichMessageButton(text="🟢 30s" if timer == 30 else "🔴 30s", style=enums.ButtonStyle.SUCCESS if timer == 30 else enums.ButtonStyle.DANGER, callback_data="f_time|30"),
+            types.RichMessageButton(text="🟢 45s" if timer == 45 else "🔴 45s", style=enums.ButtonStyle.SUCCESS if timer == 45 else enums.ButtonStyle.DANGER, callback_data="f_time|45"),
+            types.RichMessageButton(text="🟢 60s" if timer == 60 else "🔴 60s", style=enums.ButtonStyle.SUCCESS if timer == 60 else enums.ButtonStyle.DANGER, callback_data="f_time|60"),
+        ],
+        rounds_btns,
+        [
+            types.RichMessageButton(text="✅ Accept Challenge", style=enums.ButtonStyle.SUCCESS, callback_data="f_accept"),
+            types.RichMessageButton(text="❌ Decline", style=enums.ButtonStyle.DANGER, callback_data="f_decline"),
+        ],
+    ]
+    return caption, buttons
 
 
 async def fight_timeout_task(client: Client, chat_id: int, round_num: int, timer_duration: int):
@@ -36,26 +76,24 @@ async def fight_timeout_task(client: Client, chat_id: int, round_num: int, timer
         game = ACTIVE_FIGHTS.get(chat_id)
         if game and game["round"] == round_num:
             word = game["word"]
-            s = get_settings(chat_id)
-            settings_dict = dict(s) if s else {}
-            if settings_dict.get("auto_delete") and game.get("msg_id"):
+            s = dict(get_settings(chat_id)) if get_settings(chat_id) else {}
+            if s.get("auto_delete") and game.get("msg_id"):
                 await safe_delete_and_unpin(client, chat_id, game["msg_id"])
             try:
                 caption = (
-                    f"<blockquote><emoji id=5895705279416241926>⏰</emoji> <u><b>𝐑𝐎𝐔𝐍𝐃 {round_num} 𝐓𝐈𝐌𝐄𝐎𝐔𝐓!</b></u></blockquote>\n\n"
-                    f"<blockquote expandable>"
-                    f"❌ <b>Answer :</b> <code>{word.upper()}</code>\n"
-                    f"<emoji id=5974235702701853774>🔄</emoji> <i>Next round starting immediately...</i></blockquote>"
+                    f"<blockquote>⏰ <u><b>ROUND {round_num} TIMEOUT!</b></u></blockquote>\n\n"
+                    f"<blockquote>❌ <b>Answer was :</b> <code>{word.upper()}</code>\n"
+                    f"🔄 <i>Next round starting in 2 seconds...</i></blockquote>"
                 )
                 t_msg = await send_jumble_rich(client, chat_id, caption)
-                if settings_dict.get("auto_delete") and t_msg:
+                if s.get("auto_delete") and t_msg:
                     asyncio.create_task(delete_after(t_msg, 4))
             except Exception:
                 pass
             should_advance = True
 
     if should_advance:
-        await asyncio.sleep(2.5)
+        await asyncio.sleep(2)
         asyncio.create_task(fight_next(client, chat_id))
 
 
@@ -72,7 +110,8 @@ async def fight_next(client: Client, chat_id: int):
             pass
 
     game["round"] += 1
-    if game["round"] > 10:
+    total_r = game.get("total_rounds", 10)
+    if game["round"] > total_r:
         await finish_fight(client, chat_id)
         return
 
@@ -89,38 +128,34 @@ async def fight_next(client: Client, chat_id: int):
 
     header_icon = "💰" if game.get("is_bet") else "⚔️"
     header_name = "𝐉𝐔𝐌𝐁𝐋𝐄 𝐁𝐄𝐓 𝐅𝐈𝐆𝐇𝐓" if game.get("is_bet") else "𝐉𝐔𝐌𝐁𝐋𝐄 𝐅𝐈𝐆𝐇𝐓"
-    extra_info = f"\n💵 <b>𝐁ᴇᴛ:</b> <code>{game.get('bet_amount')} pts</code>" if game.get("is_bet") else ""
+    extra_info = f"\n💵 <b>Stake Pot:</b> <code>{game.get('bet_amount')} pts</code>" if game.get("is_bet") else ""
 
     caption = (
-        f"<blockquote><emoji id=5895705279416241926>{header_icon}</emoji> <u><b>{header_name} — 𝐑𝐎𝐔𝐍𝐃 {game['round']}/10</b></u></blockquote>\n\n"
-        f"<blockquote expandable>"
-        f"<emoji id=6066395745139824604>🎯</emoji> <b>𝐃ɪғғɪᴄᴜʟᴛʏ:</b> <code>{diff.title()}</code>\n"
-        f"<emoji id=5974235702701853774>⏱️</emoji> <b>𝐓ɪᴍᴇ:</b> <code>{game['timer']}s</code>{extra_info}\n"
-        f"<emoji id=5409132617750555920>👥</emoji> <b>Versus:</b> {game['mentions'][game['players'][0]]} 🆚 {game['mentions'][game['players'][1]]}</blockquote>"
+        f"<blockquote>{header_icon} <u><b>{header_name} — ROUND {game['round']}/{total_r}</b></u></blockquote>\n\n"
+        f"<blockquote>🎯 <b>Difficulty :</b> <code>{diff.title()}</code> | ⏱️ <b>Time:</b> <code>{game['timer']}s</code>{extra_info}\n"
+        f"👥 <b>Duelists :</b> {game['mentions'][game['players'][0]]} 🆚 {game['mentions'][game['players'][1]]}</blockquote>\n\n"
+        "<blockquote>🔀 <i>Unscramble letters and type in chat to score!</i></blockquote>"
     )
 
-    blocks = []
-    if image_path and os.path.isfile(str(image_path)):
-        try:
-            blocks.append(types.InputRichBlockPhoto(photo=types.InputMediaPhoto(str(image_path))))
-        except Exception:
-            pass
-
-    blocks.extend(html_to_rich_blocks(caption))
-    blocks.append(types.InputRichBlockButtons(buttons=fight_rich_buttons()[0]))
+    buttons = [
+        [
+            types.RichMessageButton(
+                text="💡 𝐇ɪɴᴛ",
+                style=enums.ButtonStyle.PRIMARY,
+                callback_data="fight_hint",
+            )
+        ]
+    ]
 
     try:
-        sent = await client.send_rich_message(
-            chat_id=chat_id,
-            rich_message=types.InputRichMessage(blocks=blocks)
-        )
+        sent = await send_jumble_rich(client, chat_id, caption, buttons, photo=image_path if os.path.isfile(str(image_path)) else None)
         game["msg_id"] = sent.id
         try:
             await sent.pin(disable_notification=True)
         except Exception:
             pass
     except Exception as e:
-        print(f"Fight error: {e}")
+        print(f"Fight dispatch error: {e}")
 
     game["task"] = asyncio.create_task(fight_timeout_task(client, chat_id, game["round"], game["timer"]))
 
@@ -137,9 +172,8 @@ async def finish_fight(client: Client, chat_id: int):
         except Exception:
             pass
 
-    s = get_settings(chat_id)
-    settings_dict = dict(s) if s else {}
-    if settings_dict.get("auto_delete") and game.get("msg_id"):
+    s = dict(get_settings(chat_id)) if get_settings(chat_id) else {}
+    if s.get("auto_delete") and game.get("msg_id"):
         await safe_delete_and_unpin(client, chat_id, game["msg_id"])
 
     p1, p2 = game["players"]
@@ -160,11 +194,10 @@ async def finish_fight(client: Client, chat_id: int):
             DB.execute("UPDATE users SET fight_losses=fight_losses+1 WHERE user_id=?", (loser,))
             DB.commit()
 
-        win_text = f"🏆 <b>Winner:</b> {game['mentions'][winner]} 🎉" if winner else "🤝 <b>Match Draw!</b>"
+        win_text = f"🏆 <b>Winner :</b> {game['mentions'][winner]} 🎉" if winner else "🤝 <b>Match Draw!</b>"
         result_caption = (
-            "<blockquote><emoji id=5895705279416241926>🏁</emoji> <u><b>𝐉𝐔𝐌𝐁𝐋𝐄 𝐅𝐈𝐆𝐇𝐓 𝐎𝐕𝐄𝐑!</b></u></blockquote>\n\n"
-            "<blockquote expandable>"
-            f"👤 {m1} — <b>{s1} pts</b>\n"
+            "<blockquote>🏁 <u><b>𝐉𝐔𝐌𝐁𝐋𝐄 𝐅𝐈𝐆𝐇𝐓 𝐎𝐕𝐄𝐑!</b></u></blockquote>\n\n"
+            f"<blockquote>👤 {m1} — <b>{s1} pts</b>\n"
             f"👤 {m2} — <b>{s2} pts</b>\n\n"
             f"{win_text}</blockquote>"
         )
@@ -174,13 +207,11 @@ async def finish_fight(client: Client, chat_id: int):
                 total_pot = (bet_amt * 2) + 100
                 DB.execute("UPDATE users SET points=points+?, stars=stars+?, bet_wins=bet_wins+1 WHERE user_id=?", (total_pot, total_pot, winner))
                 DB.execute("UPDATE users SET bet_losses=bet_losses+1 WHERE user_id=?", (loser,))
-                DB.execute("INSERT INTO score_history (user_id, chat_id, points, timestamp) VALUES (?, ?, ?, ?)", (winner, chat_id, total_pot, now))
                 DB.commit()
                 result_caption = (
-                    "<blockquote><emoji id=5895705279416241926>💰</emoji> <u><b>COMEBACK RE-BET OVER!</b></u></blockquote>\n\n"
-                    "<blockquote expandable>"
-                    f"🏆 <b>Winner:</b> {game['mentions'][winner]} (+{total_pot} pts/stars)\n"
-                    f"💀 <b>Loser:</b> {game['mentions'][loser]}</blockquote>"
+                    "<blockquote>💰 <u><b>COMEBACK RE-BET OVER!</b></u></blockquote>\n\n"
+                    f"<blockquote>🏆 <b>Final Winner :</b> {game['mentions'][winner]} (+{total_pot} pts/stars)\n"
+                    f"💀 <b>Loser :</b> {game['mentions'][loser]}</blockquote>"
                 )
             else:
                 total_pot = bet_amt * 2
@@ -190,8 +221,6 @@ async def finish_fight(client: Client, chat_id: int):
 
                 DB.execute("UPDATE users SET points=points+?, stars=stars+?, bet_wins=bet_wins+1 WHERE user_id=?", (win_reward, win_reward, winner))
                 DB.execute("UPDATE users SET points=points+?, stars=stars+?, bet_losses=bet_losses+1 WHERE user_id=?", (loser_cashback, loser_cashback, loser))
-                DB.execute("INSERT INTO score_history (user_id, chat_id, points, timestamp) VALUES (?, ?, ?, ?)", (winner, chat_id, win_reward, now))
-                DB.execute("INSERT INTO score_history (user_id, chat_id, points, timestamp) VALUES (?, ?, ?, ?)", (loser, chat_id, loser_cashback, now))
                 DB.commit()
 
                 REBET_LOBBY[chat_id] = {
@@ -200,35 +229,40 @@ async def finish_fight(client: Client, chat_id: int):
                     "rebet_amount": rebet_stake,
                     "difficulty": game["difficulty"],
                     "timer": game["timer"],
+                    "total_rounds": 10,
                     "winner_mention": game['mentions'][winner],
-                    "loser_mention": game['mentions'][loser]
+                    "loser_mention": game['mentions'][loser],
                 }
                 end_buttons = [
                     [
                         types.RichMessageButton(
-                            text=f"🔁 25% Re-Bet ({rebet_stake} pts) + 100 Bonus",
+                            text=f"🔁 25% Comeback Re-Bet ({rebet_stake} pts) + 100 Bonus",
                             style=enums.ButtonStyle.SUCCESS,
                             callback_data="rebet_challenge",
                         )
                     ]
                 ]
                 result_caption = (
-                    "<blockquote><emoji id=5895705279416241926>💰</emoji> <u><b>𝐉𝐔𝐌𝐁𝐋𝐄 𝐁𝐄𝐓 𝐅𝐈𝐆𝐇𝐓 𝐎𝐕𝐄𝐑!</b></u></blockquote>\n\n"
-                    "<blockquote expandable>"
-                    f"🏆 <b>Winner (75%):</b> {game['mentions'][winner]} (+{win_reward} pts)\n"
-                    f"🛡️ <b>Cashback (25%):</b> {game['mentions'][loser]} (+{loser_cashback} pts)</blockquote>"
+                    "<blockquote>💰 <u><b>𝐉𝐔𝐌𝐁𝐋𝐄 𝐁𝐄𝐓 𝐅𝐈𝐆𝐇𝐓 𝐎𝐕𝐄𝐑!</b></u></blockquote>\n\n"
+                    f"<blockquote>🏆 <b>Winner (75%) :</b> {game['mentions'][winner]} (+{win_reward} pts)\n"
+                    f"🛡️ <b>Loser Cashback (25%) :</b> {game['mentions'][loser]} (+{loser_cashback} pts)</blockquote>\n\n"
+                    "<blockquote><i>Loser can tap button below to trigger Comeback Duel!</i></blockquote>"
                 )
         else:
             DB.execute("UPDATE users SET points=points+?, stars=stars+? WHERE user_id=?", (bet_amt, bet_amt, p1))
             DB.execute("UPDATE users SET points=points+?, stars=stars+? WHERE user_id=?", (bet_amt, bet_amt, p2))
             DB.commit()
-            result_caption = f"<blockquote><emoji id=5895705279416241926>🤝</emoji> <b>BET DRAW! Refunded {bet_amt} points each.</b></blockquote>"
+            result_caption = f"<blockquote>🤝 <b>BET DRAW! Refunded {bet_amt} points each.</b></blockquote>"
 
     await send_jumble_rich(client, chat_id, result_caption, end_buttons)
     await asyncio.sleep(3)
-    if settings_dict.get("is_active"):
-        asyncio.create_task(start_game(client, chat_id, settings_dict.get("default_diff", "medium"), chat_id))
+    if s.get("is_active", 1):
+        asyncio.create_task(start_game(client, chat_id, s.get("default_diff", "medium"), chat_id))
 
+
+# ============================================================
+# COMMANDS & INVITATION ROUTER
+# ============================================================
 
 @Client.on_message(filters.command(["jumblefight", "fight"]))
 async def jumble_fight_cmd(client: Client, message: Message):
@@ -266,67 +300,12 @@ async def jumble_fight_cmd(client: Client, message: Message):
         "m2": m2,
         "difficulty": "medium",
         "timer": 60,
+        "total_rounds": 10,
         "is_bet": False,
-        "bet_amount": 0
+        "bet_amount": 0,
     }
 
-    caption = (
-        "<blockquote><emoji id=5895705279416241926>⚔️</emoji> <u><b>JUMBLE FIGHT INVITATION</b></u></blockquote>\n\n"
-        "<blockquote expandable>"
-        f"<emoji id=5974235702701853774>👤</emoji> <b>Challenger :</b> {m1}\n"
-        f"<emoji id=6066395745139824604>🎯</emoji> <b>Opponent :</b> {m2}\n\n"
-        "Configure difficulty & timer below, then accept to duel!</blockquote>"
-    )
-
-    buttons = [
-        [
-            types.RichMessageButton(
-                text="🟢 Easy",
-                style=enums.ButtonStyle.SUCCESS,
-                callback_data="f_diff_easy",
-            ),
-            types.RichMessageButton(
-                text="🟡 Medium",
-                style=enums.ButtonStyle.PRIMARY,
-                callback_data="f_diff_medium",
-            ),
-            types.RichMessageButton(
-                text="🔴 Hard",
-                style=enums.ButtonStyle.DANGER,
-                callback_data="f_diff_hard",
-            ),
-        ],
-        [
-            types.RichMessageButton(
-                text="⏱️ 30s",
-                style=enums.ButtonStyle.DEFAULT,
-                callback_data="f_time_30",
-            ),
-            types.RichMessageButton(
-                text="⏱️ 45s",
-                style=enums.ButtonStyle.DEFAULT,
-                callback_data="f_time_45",
-            ),
-            types.RichMessageButton(
-                text="⏱️ 60s",
-                style=enums.ButtonStyle.DEFAULT,
-                callback_data="f_time_60",
-            ),
-        ],
-        [
-            types.RichMessageButton(
-                text="✅ Accept Challenge",
-                style=enums.ButtonStyle.SUCCESS,
-                callback_data="f_accept",
-            ),
-            types.RichMessageButton(
-                text="❌ Decline",
-                style=enums.ButtonStyle.DANGER,
-                callback_data="f_decline",
-            ),
-        ],
-    ]
-
+    caption, buttons = build_fight_lobby_card(FIGHT_LOBBY[key])
     await send_jumble_rich(client, message.chat.id, caption, buttons)
 
 
@@ -377,33 +356,117 @@ async def bet_fight_cmd(client: Client, message: Message):
         "m2": m2,
         "difficulty": diff,
         "timer": 60,
+        "total_rounds": 10,
         "is_bet": True,
         "bet_amount": amount,
-        "is_rebet": False
+        "is_rebet": False,
     }
 
-    caption = (
-        "<blockquote><emoji id=5895705279416241926>💰</emoji> <u><b>HIGH STAKES BET FIGHT</b></u></blockquote>\n\n"
-        "<blockquote expandable>"
-        f"<emoji id=5974235702701853774>👤</emoji> <b>Challenger :</b> {m1}\n"
-        f"<emoji id=6066395745139824604>🎯</emoji> <b>Opponent :</b> {m2}\n"
-        f"💵 <b>Bet Amount :</b> <code>{amount} Points / Stars</code>\n"
-        f"🎯 <b>Difficulty :</b> <code>{diff.title()}</code></blockquote>"
-    )
-
-    buttons = [
-        [
-            types.RichMessageButton(
-                text="✅ Accept Bet",
-                style=enums.ButtonStyle.SUCCESS,
-                callback_data="f_accept",
-            ),
-            types.RichMessageButton(
-                text="❌ Decline",
-                style=enums.ButtonStyle.DANGER,
-                callback_data="f_decline",
-            ),
-        ]
-    ]
-
+    caption, buttons = build_fight_lobby_card(FIGHT_LOBBY[message.chat.id])
     await send_jumble_rich(client, message.chat.id, caption, buttons)
+
+
+# ============================================================
+# LOBBY CALLBACKS (Accept, Decline, Configure, Rebet)
+# ============================================================
+
+@Client.on_callback_query(filters.regex(r"^(f_|rebet_)"))
+async def fight_callbacks_router(client: Client, query: CallbackQuery):
+    chat_id = query.message.chat.id
+    user_id = query.from_user.id
+    data = query.data.split("|")
+    action = data[0]
+
+    # Rebet Challenge
+    if action == "rebet_challenge":
+        rebet = REBET_LOBBY.get(chat_id)
+        if not rebet:
+            return await query.answer("Re-bet session expire ho chuka hai.", show_alert=True)
+        if user_id != rebet["original_loser"]:
+            return await query.answer("Sirf loser hi comeback challenge kar sakta hai!", show_alert=True)
+
+        loser_u = dict(get_user(user_id))
+        pts = loser_u.get("stars", 0) if loser_u.get("stars", 0) > 0 else loser_u.get("points", 0)
+        if pts < rebet["rebet_amount"]:
+            return await query.answer("Balance kam hai re-bet ke liye!", show_alert=True)
+
+        ACTIVE_FIGHTS[chat_id] = {
+            "players": [rebet["original_winner"], rebet["original_loser"]],
+            "names": {rebet["original_winner"]: "Winner", rebet["original_loser"]: "Loser"},
+            "mentions": {rebet["original_winner"]: rebet["winner_mention"], rebet["original_loser"]: rebet["loser_mention"]},
+            "round": 0,
+            "total_rounds": 10,
+            "scores": defaultdict(int),
+            "word": None,
+            "expires": None,
+            "task": None,
+            "difficulty": rebet["difficulty"],
+            "timer": rebet["timer"],
+            "msg_id": None,
+            "is_bet": True,
+            "bet_amount": rebet["rebet_amount"],
+            "is_rebet": True,
+        }
+        del REBET_LOBBY[chat_id]
+        await query.answer("Comeback Re-Bet Accepted!")
+        await query.message.delete()
+        asyncio.create_task(fight_next(client, chat_id))
+        return
+
+    lobby = FIGHT_LOBBY.get(chat_id)
+    if not lobby:
+        return await query.answer("Duel request expired ya valid nahi hai.", show_alert=True)
+
+    if action == "f_accept":
+        if user_id != lobby["p2"]:
+            return await query.answer("Sirf challenged player accept kar sakta hai!", show_alert=True)
+
+        if lobby["is_bet"]:
+            DB.execute("UPDATE users SET points=points-?, stars=stars-? WHERE user_id=?", (lobby["bet_amount"], lobby["bet_amount"], lobby["p1"]))
+            DB.execute("UPDATE users SET points=points-?, stars=stars-? WHERE user_id=?", (lobby["bet_amount"], lobby["bet_amount"], lobby["p2"]))
+            DB.commit()
+
+        ACTIVE_FIGHTS[chat_id] = {
+            "players": [lobby["p1"], lobby["p2"]],
+            "names": {lobby["p1"]: lobby["p1_name"], lobby["p2"]: lobby["p2_name"]},
+            "mentions": {lobby["p1"]: lobby["m1"], lobby["p2"]: lobby["m2"]},
+            "round": 0,
+            "total_rounds": lobby["total_rounds"],
+            "scores": defaultdict(int),
+            "word": None,
+            "expires": None,
+            "task": None,
+            "difficulty": lobby["difficulty"],
+            "timer": lobby["timer"],
+            "msg_id": None,
+            "is_bet": lobby["is_bet"],
+            "bet_amount": lobby["bet_amount"],
+            "is_rebet": False,
+        }
+        del FIGHT_LOBBY[chat_id]
+        await query.answer("Duel Accepted! Starting Round 1...")
+        await query.message.delete()
+        asyncio.create_task(fight_next(client, chat_id))
+        return
+
+    elif action == "f_decline":
+        if user_id not in (lobby["p1"], lobby["p2"]):
+            return await query.answer("Aap is duel me shamil nahi hain.", show_alert=True)
+        del FIGHT_LOBBY[chat_id]
+        await query.message.delete()
+        return await query.answer("Challenge declined.")
+
+    # Configurations: Sirf challenger ya opponent customize kar sakein
+    if user_id not in (lobby["p1"], lobby["p2"]):
+        return await query.answer("Sirf dono duelists settings adjust kar sakte hain!", show_alert=True)
+
+    if action == "f_diff":
+        lobby["difficulty"] = data[1]
+    elif action == "f_time":
+        lobby["timer"] = int(data[1])
+    elif action == "f_set_r":
+        lobby["total_rounds"] = int(data[1])
+
+    await query.answer()
+    caption, buttons = build_fight_lobby_card(lobby)
+    await edit_jumble_rich(client, chat_id, query.message.id, caption, buttons)
