@@ -3,15 +3,19 @@ import os
 import random
 import time
 from database import DB, get_settings, get_global_config, ensure_user
-from helpers import safe_delete_and_unpin, delete_after, is_admin_or_owner, is_owner, is_authed
+from helpers import (
+    safe_delete_and_unpin, 
+    delete_after, 
+    is_admin_or_owner, 
+    is_owner, 
+    is_authed, 
+    ACTIVE_FIGHTS
+)
 from image_gen import make_puzzle_image
 from pyrogram import Client, filters, enums, types
 from pyrogram.types import CallbackQuery, Message
 from word_bank import choose_word, jumble_word
 from utils.rich import html_to_rich_blocks
-
-# Shared reference across game core and fight system
-ACTIVE_FIGHTS = {}
 
 
 async def check_admin_safe(chat, user_id: int) -> bool:
@@ -65,7 +69,7 @@ def rich_game_buttons(puzzle_id: int):
 
 
 async def start_game(client: Client, chat_id: int, difficulty: str, message_or_chat):
-    # Match running hone par puzzle bilkul start nahi hoga
+    # Match running hone par regular puzzle start nahi hoga
     if chat_id in ACTIVE_FIGHTS:
         return
 
@@ -147,7 +151,7 @@ async def start_game(client: Client, chat_id: int, difficulty: str, message_or_c
 async def expire_game(client: Client, chat_id: int, puzzle_id: int, expires: float):
     await asyncio.sleep(max(0, expires - time.time()))
 
-    # Duel chalu hone par normal task foran exit karega
+    # Duel chalu hone par regular task exit karega
     if chat_id in ACTIVE_FIGHTS:
         return
 
