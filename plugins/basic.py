@@ -1,5 +1,5 @@
 from datetime import datetime
-from pyrogram import Client, filters, types
+from pyrogram import Client, filters, enums, types
 from pyrogram.types import Message
 from database import DB, ensure_user, get_user, get_settings, set_settings, is_admin, get_top_players
 from helpers import get_mention
@@ -48,14 +48,11 @@ async def stats_cmd(client: Client, message: Message):
     priv_status = "🔒 Private" if user_dict.get("is_private") else "🌐 Public"
     points_val = user_dict.get("stars", 0) if user_dict.get("stars", 0) > 0 else user_dict.get("points", 0)
 
-    slider_bar = make_exp_slider_row(rem_exp, 500)
-
     caption_html = (
         "<blockquote><emoji id=5895705279416241926>👤</emoji> <u><b>PLAYER PROFILE & STATS</b></u></blockquote>\n\n"
         "<blockquote expandable>"
         f"<emoji id=5974235702701853774>👤</emoji> <b>Player :</b> {mention} (<code>{target.id}</code>)\n"
         f"<emoji id=6066395745139824604>🎖️</emoji> <b>Rank :</b> Level {current_level} ({rem_exp}/500 EXP)\n"
-        f"<b>Progress :</b> <code>{slider_bar}</code>\n"
         f"⭐ <b>Points / Stars :</b> <code>{points_val}</code>\n"
         f"🔥 <b>Streak :</b> <code>{user_dict.get('streak', 0)}</code> (Best: {user_dict.get('best_streak', 0)})\n"
         f"🛡️ <b>Privacy :</b> <code>{priv_status}</code>\n\n"
@@ -65,20 +62,23 @@ async def stats_cmd(client: Client, message: Message):
         f"💰 <b>Bet Fight :</b> <code>{user_dict.get('bet_wins', 0)}W - {user_dict.get('bet_losses', 0)}L</code> ({bet_winrate:.1f}%)</blockquote>"
     )
 
+    slider = make_exp_slider_row(rem_exp, 500)
     buttons = [
         [
-            types.InlineKeyboardButton(
+            types.RichMessageButton(
                 text="🛍️ Power Shop",
+                style=enums.ButtonStyle.SUCCESS,
                 callback_data=f"buy_shop|menu|{target.id}",
             ),
-            types.InlineKeyboardButton(
+            types.RichMessageButton(
                 text="📊 Top Graph",
+                style=enums.ButtonStyle.PRIMARY,
                 callback_data="refresh_leaderboard",
             ),
         ]
     ]
 
-    await send_jumble_rich(client, message.chat.id, caption_html, buttons)
+    await send_jumble_rich(client, message.chat.id, caption_html, buttons, slider_row=slider)
 
 
 # 2. /leaderboard
@@ -111,12 +111,14 @@ async def leaderboard_cmd(client: Client, message: Message):
 
     buttons = [
         [
-            types.InlineKeyboardButton(
+            types.RichMessageButton(
                 text="👤 My Profile",
+                style=enums.ButtonStyle.SUCCESS,
                 callback_data=f"show_my_stats|{message.from_user.id}",
             ),
-            types.InlineKeyboardButton(
+            types.RichMessageButton(
                 text="🔄 Refresh",
+                style=enums.ButtonStyle.PRIMARY,
                 callback_data="refresh_leaderboard",
             ),
         ]
@@ -150,18 +152,21 @@ async def settings_cmd(client: Client, message: Message):
 
     buttons = [
         [
-            types.InlineKeyboardButton(
+            types.RichMessageButton(
                 text="🔄 Toggle Game State",
+                style=enums.ButtonStyle.PRIMARY,
                 callback_data=f"toggle_game|{chat_id}",
             ),
-            types.InlineKeyboardButton(
+            types.RichMessageButton(
                 text="🗑️ Toggle Auto-Del",
+                style=enums.ButtonStyle.DANGER,
                 callback_data=f"toggle_autodel|{chat_id}",
             ),
         ],
         [
-            types.InlineKeyboardButton(
+            types.RichMessageButton(
                 text="🎯 Change Difficulty",
+                style=enums.ButtonStyle.SUCCESS,
                 callback_data=f"change_diff|{chat_id}",
             )
         ],
@@ -189,28 +194,27 @@ async def daily_bonus_handler(client: Client, message: Message):
     DB.execute("UPDATE users SET stars = stars + 100, points = points + 100, last_daily = ? WHERE user_id = ?", (now_ts, user_id))
     DB.commit()
 
-    curr_exp = u_dict.get("exp", 0) % 500
-    slider_bar = make_exp_slider_row(curr_exp, 500)
-
+    curr_exp = (u_dict.get("exp", 0)) % 500
     caption = (
         "<blockquote><emoji id=5895705279416241926>🎁</emoji> <u><b>DAILY BONUS CLAIMED</b></u></blockquote>\n\n"
         "<blockquote expandable>"
         "<emoji id=6066395745139824604>🎀</emoji> <b>Reward :</b> +100 Stars / Points ⭐\n"
-        f"<b>Progress :</b> <code>{slider_bar}</code>\n"
         f"<emoji id=5974235702701853774>👤</emoji> <b>Player :</b> {message.from_user.mention}\n"
         "<emoji id=5409132617750555920>⚡</emoji> Next reward unlocks in 24 Hours!</blockquote>"
     )
 
+    slider = make_exp_slider_row(curr_exp, 500)
     buttons = [
         [
-            types.InlineKeyboardButton(
+            types.RichMessageButton(
                 text="🛍️ Visit Power Shop",
+                style=enums.ButtonStyle.SUCCESS,
                 callback_data=f"buy_shop|menu|{user_id}",
             )
         ]
     ]
 
-    await send_jumble_rich(client, message.chat.id, caption, buttons)
+    await send_jumble_rich(client, message.chat.id, caption, buttons, slider_row=slider)
 
 
 # 5. /calculate & /audit
