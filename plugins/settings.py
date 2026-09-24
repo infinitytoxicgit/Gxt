@@ -2,7 +2,7 @@ from pyrogram import Client, filters, enums, types
 from pyrogram.types import Message, CallbackQuery
 from database import DB, get_settings
 from helpers import is_admin_or_owner
-from utils.rich import send_jumble_rich, html_to_rich_blocks
+from utils.rich import send_jumble_rich, edit_jumble_rich
 
 def build_settings_card(chat_id: int, chat_title: str):
     raw_s = get_settings(chat_id)
@@ -22,7 +22,7 @@ def build_settings_card(chat_id: int, chat_title: str):
     caption = (
         f"<blockquote>⚙️ <u><b>𝐉ᴜᴍʙʟᴇ 𝐆ʀᴏᴜᴘ 𝐒ᴇᴛᴛɪɴɢs</b></u>\n\n"
         f"👥 <b>Group :</b> <code>{chat_title}</code>\n"
-        f"🆔 <b>Chat ID :</b> <code>{chat_id}</code>\n"
+        f"🆔 <b>Chat ID :</b> <code>{chat_id}</code>\n\n"
         f"⚡ <b>Game Status :</b> {st_text}\n"
         f"🗑️ <b>Auto Delete :</b> {del_text}\n"
         f"🎯 <b>Default Mode :</b> <code>{cur_diff.title()}</code>\n"
@@ -90,7 +90,7 @@ def build_timers_card(chat_id: int):
 
     caption = (
         f"<blockquote>⏱️ <u><b>𝐂𝐇𝐎𝐎𝐒𝐄 𝐑𝐎𝐔𝐍𝐃 𝐓𝐈𝐌𝐄𝐑𝐒 ({cur_diff.upper()})</b></u>\n\n"
-        f"Selected Duration: <b>{cur_val}s</b>\n"
+        f"Current Duration: <b>{cur_val}s</b>\n"
         f"Active timer is <b>Green</b>, others are <b>Red</b>. Tap any to switch:</blockquote>"
     )
 
@@ -130,6 +130,9 @@ def build_timers_card(chat_id: int):
 
 @Client.on_message(filters.command(["settings", "setting", "jumblesettings"]))
 async def settings_cmd(client: Client, message: Message):
+    if message.chat.type == enums.ChatType.PRIVATE:
+        return await message.reply_text("ℹ️ `/settings` sirf groups me use hota hai jahan bot game conduct karta hai.")
+
     if not await is_admin_or_owner(message.chat, message.from_user.id):
         return await message.reply_text("❌ Sirf Group Admins settings access kar sakte hain.")
 
@@ -171,10 +174,8 @@ async def settings_callback_router(client: Client, query: CallbackQuery):
 
     elif action == "set_menu_timers":
         caption, buttons = build_timers_card(chat_id)
-        blocks = html_to_rich_blocks(caption)
-        for r in buttons:
-            blocks.append(types.InputRichBlockButtons(buttons=r))
-        return await query.message.edit_rich_message(rich_message=types.InputRichMessage(blocks=blocks))
+        await query.answer()
+        return await edit_jumble_rich(client, chat_id, query.message.id, caption, buttons)
 
     elif action == "set_timer_val":
         diff = data[1]
@@ -183,10 +184,7 @@ async def settings_callback_router(client: Client, query: CallbackQuery):
         DB.commit()
         await query.answer(f"{diff.upper()} timer set to {secs}s!")
         caption, buttons = build_timers_card(chat_id)
-        blocks = html_to_rich_blocks(caption)
-        for r in buttons:
-            blocks.append(types.InputRichBlockButtons(buttons=r))
-        return await query.message.edit_rich_message(rich_message=types.InputRichMessage(blocks=blocks))
+        return await edit_jumble_rich(client, chat_id, query.message.id, caption, buttons)
 
     elif action == "set_back_main":
         await query.answer()
@@ -197,7 +195,4 @@ async def settings_callback_router(client: Client, query: CallbackQuery):
 
     # Redraw Main Settings Page
     caption, buttons = build_settings_card(chat_id, query.message.chat.title or "Group")
-    blocks = html_to_rich_blocks(caption)
-    for r in buttons:
-        blocks.append(types.InputRichBlockButtons(buttons=r))
-    await query.message.edit_rich_message(rich_message=types.InputRichMessage(blocks=blocks))
+    await edit_jumble_rich(client, chat_id, query.message.id, caption, buttons)
