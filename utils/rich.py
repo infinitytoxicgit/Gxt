@@ -7,22 +7,18 @@ _TAG_RE = re.compile(
     re.IGNORECASE,
 )
 
-
 def _make_custom_emoji(text, eid):
     try:
         val = int(str(eid).strip("\"' "))
-        if hasattr(types, "RichTextCustomEmoji"):
-            return types.RichTextCustomEmoji(text=text, document_id=val)
+        return types.RichTextCustomEmoji(text=text, document_id=val)
     except Exception:
         pass
     try:
         val = int(str(eid).strip("\"' "))
-        if hasattr(types, "RichTextCustomEmoji"):
-            return types.RichTextCustomEmoji(text=text, custom_emoji_id=val)
+        return types.RichTextCustomEmoji(text=text, custom_emoji_id=val)
     except Exception:
         pass
     return text
-
 
 def _parse_inline(segment):
     if not segment:
@@ -48,18 +44,16 @@ def _parse_inline(segment):
             del parts[start:]
             inner = inner[0] if len(inner) == 1 else inner if inner else ""
 
-            if open_tag == "b" and hasattr(types, "RichTextBold"):
+            if open_tag == "b":
                 parts.append(types.RichTextBold(text=inner))
-            elif open_tag == "u" and hasattr(types, "RichTextUnderline"):
+            elif open_tag == "u":
                 parts.append(types.RichTextUnderline(text=inner))
-            elif open_tag == "code" and hasattr(types, "RichTextCode"):
+            elif open_tag == "code":
                 parts.append(types.RichTextCode(text=inner))
-            elif open_tag == "a" and hasattr(types, "RichTextUrl"):
+            elif open_tag == "a":
                 parts.append(types.RichTextUrl(text=inner, url=val.strip("\"' ")))
             elif open_tag == "emoji":
                 parts.append(_make_custom_emoji(inner or "✨", val))
-            else:
-                parts.append(inner)
 
     if pos < len(segment):
         parts.append(segment[pos:])
@@ -68,11 +62,7 @@ def _parse_inline(segment):
         return ""
     return parts[0] if len(parts) == 1 else parts
 
-
 def html_to_rich_blocks(caption_html: str):
-    if not hasattr(types, "InputRichBlockParagraph"):
-        return []
-
     blocks = []
     bq_pattern = re.compile(
         r"<(blockquote(?:\s+[^>]*)?)>(.*?)</blockquote\s*>",
@@ -143,7 +133,6 @@ def html_to_rich_blocks(caption_html: str):
 
     return blocks
 
-
 def make_exp_slider_row(curr_exp: int, max_exp: int = 500):
     percentage = (curr_exp / max_exp) * 100 if max_exp else 0
     umm = math.floor(percentage)
@@ -163,53 +152,27 @@ def make_exp_slider_row(curr_exp: int, max_exp: int = 500):
         bar = "─────────●"
 
     slider_text = f"{curr_exp} EXP  {bar}  {max_exp} EXP"
-
-    # Agar environment me InputRichBlockButtons available hai
-    if hasattr(types, "InputRichBlockButtons") and hasattr(types, "RichMessageButton"):
-        try:
-            btn_style = getattr(enums.ButtonStyle, "DANGER", None)
-            return types.InputRichBlockButtons(
-                buttons=[
-                    types.RichMessageButton(
-                        text=slider_text,
-                        style=btn_style,
-                        callback_data="noop_exp_bar",
-                    )
-                ]
+    btn_style = getattr(enums.ButtonStyle, "DANGER", getattr(enums.ButtonStyle, "DEFAULT", None))
+    
+    return types.InputRichBlockButtons(
+        buttons=[
+            types.RichMessageButton(
+                text=slider_text,
+                style=btn_style,
+                callback_data="noop_exp_bar",
             )
-        except Exception:
-            pass
+        ]
+    )
 
-    # Safe visual string fallback (taaki bot crash na ho)
-    return slider_text
+async def send_jumble_rich(client, chat_id: int, caption_html: str, rich_buttons_rows: list = None, slider_row=None):
+    blocks = html_to_rich_blocks(caption_html)
+    if slider_row:
+        blocks.append(slider_row)
+    if rich_buttons_rows:
+        for row in rich_buttons_rows:
+            blocks.append(types.InputRichBlockButtons(buttons=row))
 
-
-async def send_jumble_rich(client, chat_id: int, caption_html: str, rich_buttons_rows: list = None, slider_row = None):
-    # Agar client ke paas native send_rich_message method ho
-    if hasattr(client, "send_rich_message") and hasattr(types, "InputRichMessage"):
-        try:
-            blocks = html_to_rich_blocks(caption_html)
-            if slider_row and not isinstance(slider_row, str):
-                blocks.append(slider_row)
-            if rich_buttons_rows and hasattr(types, "InputRichBlockButtons"):
-                for row in rich_buttons_rows:
-                    blocks.append(types.InputRichBlockButtons(buttons=row))
-
-            return await client.send_rich_message(
-                chat_id=chat_id,
-                rich_message=types.InputRichMessage(blocks=blocks),
-            )
-        except Exception:
-            pass
-
-    # Seamless standard fallback agar custom blocks support na kare
-    final_text = caption_html
-    if isinstance(slider_row, str):
-        final_text += f"\n\n<code>{slider_row}</code>"
-
-    return await client.send_message(
+    return await client.send_rich_message(
         chat_id=chat_id,
-        text=final_text,
-        parse_mode=enums.ParseMode.HTML,
-        disable_web_page_preview=True
+        rich_message=types.InputRichMessage(blocks=blocks),
     )
