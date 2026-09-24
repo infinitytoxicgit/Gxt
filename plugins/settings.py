@@ -5,6 +5,26 @@ from helpers import is_admin_or_owner
 from utils.rich import send_jumble_rich, edit_jumble_rich
 
 
+async def check_admin_safe(chat, user_id: int) -> bool:
+    try:
+        res = await is_admin_or_owner(chat, user_id)
+        if res is not None:
+            return bool(res)
+    except TypeError:
+        try:
+            return bool(await is_admin_or_owner(chat.id, user_id))
+        except Exception:
+            pass
+    except Exception:
+        pass
+
+    try:
+        member = await chat.get_member(user_id)
+        return member.status in (enums.ChatMemberStatus.OWNER, enums.ChatMemberStatus.ADMINISTRATOR)
+    except Exception:
+        return False
+
+
 def build_settings_card(chat_id: int, chat_title: str):
     raw_s = get_settings(chat_id)
     s = dict(raw_s) if raw_s else {}
@@ -20,9 +40,8 @@ def build_settings_card(chat_id: int, chat_title: str):
     st_text = "🟢 Running" if is_active else "🔴 Stopped"
     del_text = "🟢 Enabled" if auto_del else "🔴 Disabled"
 
-    # Separate neat blockquotes
     caption = (
-        "<blockquote>⚙️ <u><b>𝐉𝐔𝐌𝐁𝐋𝐄 𝐆𝐑𝐎𝐔𝐏 𝐒𝐄𝐓𝐓𝐈𝐍𝐆𝐒</b></u></blockquote>\n\n"
+        "<blockquote>⚙️ <u><b>JUMBLE GROUP SETTINGS</b></u></blockquote>\n\n"
         f"<blockquote>👥 <b>Group :</b> <code>{chat_title}</code>\n"
         f"🆔 <b>Chat ID :</b> <code>{chat_id}</code></blockquote>\n\n"
         f"<blockquote>⚡ <b>Game Status :</b> {st_text}\n"
@@ -91,7 +110,7 @@ def build_timers_card(chat_id: int):
     cur_val = int(s.get(cur_diff, 120))
 
     caption = (
-        f"<blockquote>⏱️ <u><b>𝐂𝐇𝐎𝐎𝐒𝐄 𝐑𝐎𝐔𝐍𝐃 𝐓𝐈𝐌𝐄𝐑𝐒 ({cur_diff.upper()})</b></u></blockquote>\n\n"
+        f"<blockquote>⏱️ <u><b>CHOOSE ROUND TIMERS ({cur_diff.upper()})</b></u></blockquote>\n\n"
         f"<blockquote>Selected Duration: <b>{cur_val}s</b>\n"
         f"Active timer is <b>Green</b>, others are <b>Red</b>. Tap to change:</blockquote>"
     )
@@ -139,7 +158,7 @@ async def settings_cmd(client: Client, message: Message):
     if message.chat.type == enums.ChatType.PRIVATE:
         return await message.reply_text("ℹ️ `/settings` group ke andar use karein.")
 
-    if not await is_admin_or_owner(message.chat, message.from_user.id):
+    if not await check_admin_safe(message.chat, message.from_user.id):
         return await message.reply_text("❌ Sirf Group Admins settings access kar sakte hain.")
 
     chat_id = message.chat.id
@@ -152,7 +171,7 @@ async def settings_callback_router(client: Client, query: CallbackQuery):
     user_id = query.from_user.id
     chat_id = query.message.chat.id
 
-    if not await is_admin_or_owner(query.message.chat, user_id):
+    if not await check_admin_safe(query.message.chat, user_id):
         return await query.answer("❌ Sirf group admins hi click kar sakte hain!", show_alert=True)
 
     data = query.data.split("|")
@@ -199,6 +218,6 @@ async def settings_callback_router(client: Client, query: CallbackQuery):
         await query.message.delete()
         return await query.answer("Closed!")
 
-    # Redraw Main Settings Page live
+    # Redraw Main Settings Page
     caption, buttons = build_settings_card(chat_id, query.message.chat.title or "Group")
     await edit_jumble_rich(client, chat_id, query.message.id, caption, buttons)
