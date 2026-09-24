@@ -7,6 +7,7 @@ from collections import defaultdict
 from database import DB, get_settings, ensure_user, get_user, get_global_config
 from helpers import (
     safe_delete_and_unpin, 
+    safe_pin_and_clean,
     delete_after, 
     get_mention, 
     is_group, 
@@ -109,7 +110,6 @@ async def fight_timeout_task(client: Client, chat_id: int, current_round: int, r
     if not game:
         return
 
-    # Check whether this round was already solved or token mismatched
     if game.get("round") != current_round or game.get("round_token") != round_token or game.get("is_solved"):
         return
 
@@ -133,7 +133,6 @@ async def fight_timeout_task(client: Client, chat_id: int, current_round: int, r
         print(f"[Timeout Broadcast Error]: {e}")
 
     await asyncio.sleep(3)
-    # Direct reliable advance
     asyncio.create_task(fight_next(client, chat_id))
 
 
@@ -142,7 +141,6 @@ async def fight_next(client: Client, chat_id: int):
     if not game:
         return
 
-    # Cancel previous timer task cleanly
     if game.get("timer_task") and not game["timer_task"].done():
         try:
             game["timer_task"].cancel()
@@ -212,14 +210,10 @@ async def fight_next(client: Client, chat_id: int):
         )
         if sent:
             game["msg_id"] = sent.id
-            try:
-                await sent.pin(disable_notification=True)
-            except Exception:
-                pass
+            await safe_pin_and_clean(client, chat_id, sent.id)
     except Exception as e:
         print(f"Fight dispatch error: {e}")
 
-    # Launch next round countdown timer
     game["timer_task"] = asyncio.create_task(fight_timeout_task(client, chat_id, round_num, token, timer_val))
 
 
@@ -498,7 +492,6 @@ async def fight_chat_answer_listener(client: Client, message: Message):
     if user_id not in game["players"]:
         return
 
-    # Check correct answer match
     if message.text.strip().lower() == str(game.get("word", "")).strip().lower():
         game["is_solved"] = True
 
