@@ -1,12 +1,31 @@
 import os
+import urllib.request
 from pyrogram import Client, filters, enums, types
 from pyrogram.types import Message
 from database import ensure_user, get_user
 from helpers import get_mention
 from utils.rich import send_jumble_rich
 
-# Verified permanent banner URL
-START_BANNER = "https://envs.sh/4_q.jpg"
+START_BANNER_URL = "https://graph.org/file/7c0c03d68308f0c5dad42-ddb933df03f0ff0632.jpg"
+LOCAL_BANNER_PATH = "cache/start_banner.jpg"
+
+
+def get_cached_banner():
+    if os.path.isfile(LOCAL_BANNER_PATH):
+        return LOCAL_BANNER_PATH
+    try:
+        os.makedirs("cache", exist_ok=True)
+        req = urllib.request.Request(
+            START_BANNER_URL,
+            headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
+        )
+        with urllib.request.urlopen(req) as resp, open(LOCAL_BANNER_PATH, "wb") as f:
+            f.write(resp.read())
+        return LOCAL_BANNER_PATH
+    except Exception as e:
+        print(f"[Banner Download Error]: {e}")
+        return None
+
 
 @Client.on_message(filters.command("start") & filters.private)
 async def dm_start_handler(client: Client, message: Message):
@@ -19,7 +38,7 @@ async def dm_start_handler(client: Client, message: Message):
         "<blockquote>🧩 <u><b>WELCOME TO ADVANCED JUMBLE BOT!</b></u></blockquote>\n\n"
         f"👋 Welcome {get_mention(message.from_user)}!\n\n"
         "<blockquote>🎮 <b>Game Commands (Groups) :</b>\n"
-        "• <code>/jumble</code> - Start auto-loop jumble game\n"
+        "• <code>/jumble</code> ya <code>/word</code> - Start/Check active puzzle\n"
         "• <code>/jumblefight @user</code> - 1v1 Battle Mode (10-50 Rounds)\n"
         "• <code>/jumblebetfight [mode] [amt] @user</code> - 1v1 Bet Battle\n"
         "• <code>/settings</code> - Group Admin Panel (Timers, Modes)</blockquote>\n\n"
@@ -59,7 +78,8 @@ async def dm_start_handler(client: Client, message: Message):
         ]
     ]
 
-    await send_jumble_rich(client, message.chat.id, welcome_text, buttons, photo=START_BANNER)
+    banner_file = get_cached_banner()
+    await send_jumble_rich(client, message.chat.id, welcome_text, buttons, photo=banner_file)
 
 
 @Client.on_message(filters.command("help") & filters.private)
@@ -67,7 +87,7 @@ async def dm_help_handler(client: Client, message: Message):
     help_text = (
         "<blockquote>📖 <u><b>JUMBLE BOT COMMAND GUIDE</b></u></blockquote>\n\n"
         "<blockquote>🎮 <b>Main Commands :</b>\n"
-        "• <code>/jumble</code> - Trigger puzzle in group\n"
+        "• <code>/jumble</code> ya <code>/word</code> - Trigger puzzle in group\n"
         "• <code>/daily</code> - Claim daily reward (DM only)\n"
         "• <code>/bonus</code> - Claim group admin bonus (Once per group)\n"
         "• <code>/stats</code> - View stats with performance matrix\n"
@@ -80,4 +100,5 @@ async def dm_help_handler(client: Client, message: Message):
         "• <code>/addstar @user [amount]</code> - Add stars to player\n"
         "• <code>/deductstar @user [amount]</code> - Deduct stars from player</blockquote>"
     )
-    await send_jumble_rich(client, message.chat.id, help_text)
+    banner_file = get_cached_banner()
+    await send_jumble_rich(client, message.chat.id, help_text, photo=banner_file)
