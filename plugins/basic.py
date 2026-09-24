@@ -1,9 +1,9 @@
 from datetime import datetime
 from pyrogram import Client, filters, enums, types
-from pyrogram.types import Message
+from pyrogram.types import Message, CallbackQuery
 from database import DB, ensure_user, get_user, get_settings, set_settings, is_admin, get_top_players
-from helpers import get_mention
-from utils.rich import send_jumble_rich, make_exp_slider_row
+from helpers import get_mention, is_admin_or_owner
+from utils.rich import send_jumble_rich, make_exp_slider_row, html_to_rich_blocks
 
 
 async def resolve_target_user(client: Client, message: Message):
@@ -22,19 +22,8 @@ async def resolve_target_user(client: Client, message: Message):
     return message.from_user
 
 
-# 1. /stats command
-@Client.on_message(filters.command(["stats", "stat", "mystats", "score"]))
-async def stats_cmd(client: Client, message: Message):
-    target = await resolve_target_user(client, message)
-    if not target:
-        return await message.reply_text("❌ User nahi mila.")
-
-    ensure_user(target)
-    u = get_user(target.id)
-    if not u:
-        return await message.reply_text("❌ Is user ka koi database record nahi hai.")
-
-    user_dict = dict(u)
+def get_stats_content(target, user_data):
+    user_dict = dict(user_data)
     user_exp = user_dict.get("exp", 0)
     current_level = (user_exp // 500) + 1
     rem_exp = user_exp % 500
@@ -49,14 +38,13 @@ async def stats_cmd(client: Client, message: Message):
     points_val = user_dict.get("stars", 0) if user_dict.get("stars", 0) > 0 else user_dict.get("points", 0)
 
     caption_html = (
-        "<blockquote><emoji id=5895705279416241926>👤</emoji> <u><b>PLAYER PROFILE & STATS</b></u></blockquote>\n\n"
-        "<blockquote expandable>"
-        f"<emoji id=5974235702701853774>👤</emoji> <b>Player :</b> {mention} (<code>{target.id}</code>)\n"
-        f"<emoji id=6066395745139824604>🎖️</emoji> <b>Rank :</b> Level {current_level} ({rem_exp}/500 EXP)\n"
+        "<blockquote>👤 <u><b>PLAYER PROFILE & STATS</b></u>\n\n"
+        f"👤 <b>Player :</b> {mention} (<code>{target.id}</code>)\n"
+        f"🎖️ <b>Rank :</b> Level {current_level} ({rem_exp}/500 EXP)\n"
         f"⭐ <b>Points / Stars :</b> <code>{points_val}</code>\n"
         f"🔥 <b>Streak :</b> <code>{user_dict.get('streak', 0)}</code> (Best: {user_dict.get('best_streak', 0)})\n"
         f"🛡️ <b>Privacy :</b> <code>{priv_status}</code>\n\n"
-        f"<emoji id=5409132617750555920>🧩</emoji> <b>Puzzles Solved :</b> <code>{user_dict.get('solved', 0)}</code>\n"
+        f"🧩 <b>Puzzles Solved :</b> <code>{user_dict.get('solved', 0)}</code>\n"
         f"• 🟢 Easy: <code>{user_dict.get('easy_solved', 0)}</code> | 🟡 Med: <code>{user_dict.get('medium_solved', 0)}</code> | 🔴 Hard: <code>{user_dict.get('hard_solved', 0)}</code>\n\n"
         f"⚔️ <b>Jumble Fight :</b> <code>{user_dict.get('fight_wins', 0)}W - {user_dict.get('fight_losses', 0)}L</code> ({winrate:.1f}%)\n"
         f"💰 <b>Bet Fight :</b> <code>{user_dict.get('bet_wins', 0)}W - {user_dict.get('bet_losses', 0)}L</code> ({bet_winrate:.1f}%)</blockquote>"
@@ -77,16 +65,13 @@ async def stats_cmd(client: Client, message: Message):
             ),
         ]
     ]
+    return caption_html, buttons, slider
 
-    await send_jumble_rich(client, message.chat.id, caption_html, buttons, slider_row=slider)
 
-
-# 2. /leaderboard
-@Client.on_message(filters.command(["leaderboard", "lb", "top"]))
-async def leaderboard_cmd(client: Client, message: Message):
+def get_leaderboard_content():
     top_users = get_top_players(limit=5)
     if not top_users:
-        return await message.reply_text("📊 No players recorded in leaderboard yet.")
+        return "<blockquote>📊 No players recorded in leaderboard yet.</blockquote>", []
 
     max_score = top_users[0]["stars"] if top_users[0]["stars"] > 0 else 1
     graph_lines = []
@@ -101,12 +86,11 @@ async def leaderboard_cmd(client: Client, message: Message):
 
     chart_body = "\n".join(graph_lines)
     caption = (
-        "<blockquote><emoji id=5895705279416241926>📊</emoji> <u><b>JUMBLE LEADERBOARD GRAPH</b></u></blockquote>\n\n"
-        "<blockquote expandable>"
+        "<blockquote>📊 <u><b>JUMBLE LEADERBOARD GRAPH</b></u>\n\n"
         "<b>Performance Chart :</b>\n"
         f"<code>{chart_body}</code>\n\n"
-        "<emoji id=6066395745139824604>🎖️</emoji> <b>Formula :</b> 1 Level = 500 EXP\n"
-        "<emoji id=5409132617750555920>⚡</emoji> <b>Boosters :</b> Multipliers affect solves in real-time</blockquote>"
+        "🎖️ <b>Formula :</b> 1 Level = 500 EXP\n"
+        "⚡ <b>Boosters :</b> Multipliers affect solves in real-time</blockquote>"
     )
 
     buttons = [
@@ -114,7 +98,7 @@ async def leaderboard_cmd(client: Client, message: Message):
             types.RichMessageButton(
                 text="👤 My Profile",
                 style=enums.ButtonStyle.SUCCESS,
-                callback_data=f"show_my_stats|{message.from_user.id}",
+                callback_data="show_my_stats",
             ),
             types.RichMessageButton(
                 text="🔄 Refresh",
@@ -123,56 +107,44 @@ async def leaderboard_cmd(client: Client, message: Message):
             ),
         ]
     ]
+    return caption, buttons
 
+
+# 1. /stats command
+@Client.on_message(filters.command(["stats", "stat", "mystats", "score"]))
+async def stats_cmd(client: Client, message: Message):
+    target = await resolve_target_user(client, message)
+    if not target:
+        return await message.reply_text("❌ User nahi mila.")
+
+    ensure_user(target)
+    u = get_user(target.id)
+    if not u:
+        return await message.reply_text("❌ Is user ka koi database record nahi hai.")
+
+    caption_html, buttons, slider = get_stats_content(target, u)
+    await send_jumble_rich(client, message.chat.id, caption_html, buttons, slider_row=slider)
+
+
+# 2. /leaderboard
+@Client.on_message(filters.command(["leaderboard", "lb", "top"]))
+async def leaderboard_cmd(client: Client, message: Message):
+    caption, buttons = get_leaderboard_content()
     await send_jumble_rich(client, message.chat.id, caption, buttons)
 
 
-# 3. /settings
+# 3. /settings (Importing Panel logic from settings plugin)
 @Client.on_message(filters.command(["settings", "setting", "jumblesettings"]))
 async def settings_cmd(client: Client, message: Message):
-    chat_id = message.chat.id
-    raw_settings = get_settings(chat_id)
-    settings = dict(raw_settings) if raw_settings else {}
+    if not await is_admin_or_owner(message.chat, message.from_user.id):
+        return await message.reply_text("❌ Sirf group admins hi settings access kar sakte hain.")
 
-    status = "🟢 Running" if settings.get("is_active", True) else "🔴 Stopped"
-    auto_del = "Enabled" if settings.get("auto_delete", False) else "Disabled"
-    diff = settings.get("default_diff", "easy").title()
-    easy_t = settings.get("easy", 120)
-    med_t = settings.get("medium", 300)
-    hard_t = settings.get("hard", 600)
-
-    caption = (
-        "<blockquote><emoji id=5895705279416241926>⚙️</emoji> <u><b>𝐉ᴜᴍʙʟᴇ 𝐆ʀᴏᴜᴘ 𝐒ᴇᴛᴛɪɴɢs</b></u></blockquote>\n\n"
-        "<blockquote expandable>"
-        f"<b>Status :</b> {status}\n"
-        f"🗑️ <b>Auto Delete :</b> {auto_del}\n"
-        f"🎯 <b>Mode :</b> {diff}\n"
-        f"⏱️ <b>Timers :</b> Easy: {easy_t}s | Med: {med_t}s | Hard: {hard_t}s</blockquote>"
-    )
-
-    buttons = [
-        [
-            types.RichMessageButton(
-                text="🔄 Toggle Game State",
-                style=enums.ButtonStyle.PRIMARY,
-                callback_data=f"toggle_game|{chat_id}",
-            ),
-            types.RichMessageButton(
-                text="🗑️ Toggle Auto-Del",
-                style=enums.ButtonStyle.DANGER,
-                callback_data=f"toggle_autodel|{chat_id}",
-            ),
-        ],
-        [
-            types.RichMessageButton(
-                text="🎯 Change Difficulty",
-                style=enums.ButtonStyle.SUCCESS,
-                callback_data=f"change_diff|{chat_id}",
-            )
-        ],
-    ]
-
-    await send_jumble_rich(client, chat_id, caption, buttons)
+    try:
+        from plugins.settings import build_settings_card
+        caption, buttons = build_settings_card(message.chat.id, message.chat.title or "Group")
+        await send_jumble_rich(client, message.chat.id, caption, buttons)
+    except Exception as e:
+        await message.reply_text(f"❌ Error loading settings: {e}")
 
 
 # 4. /daily & /bonus
@@ -196,11 +168,10 @@ async def daily_bonus_handler(client: Client, message: Message):
 
     curr_exp = (u_dict.get("exp", 0)) % 500
     caption = (
-        "<blockquote><emoji id=5895705279416241926>🎁</emoji> <u><b>DAILY BONUS CLAIMED</b></u></blockquote>\n\n"
-        "<blockquote expandable>"
-        "<emoji id=6066395745139824604>🎀</emoji> <b>Reward :</b> +100 Stars / Points ⭐\n"
-        f"<emoji id=5974235702701853774>👤</emoji> <b>Player :</b> {message.from_user.mention}\n"
-        "<emoji id=5409132617750555920>⚡</emoji> Next reward unlocks in 24 Hours!</blockquote>"
+        "<blockquote>🎁 <u><b>DAILY BONUS CLAIMED</b></u>\n\n"
+        "🎀 <b>Reward :</b> +100 Stars / Points ⭐\n"
+        f"👤 <b>Player :</b> {message.from_user.mention}\n"
+        "⚡ Next reward unlocks in 24 Hours!</blockquote>"
     )
 
     slider = make_exp_slider_row(curr_exp, 500)
@@ -231,8 +202,7 @@ async def calculate_cmd(client: Client, message: Message):
     hard_c = u_dict.get("hard_solved", 0)
 
     caption = (
-        "<blockquote><emoji id=5895705279416241926>📊</emoji> <u><b>POINTS BREAKDOWN & AUDIT</b></u></blockquote>\n\n"
-        "<blockquote expandable>"
+        "<blockquote>📊 <u><b>POINTS BREAKDOWN & AUDIT</b></u>\n\n"
         f"👤 <b>Player :</b> {message.from_user.mention} (<code>{user_id}</code>)\n\n"
         f"🟢 <b>Easy Solved :</b> {easy_c} × 10 = +{easy_c * 10} pts\n"
         f"🟡 <b>Medium Solved :</b> {med_c} × 20 = +{med_c * 20} pts\n"
@@ -243,7 +213,7 @@ async def calculate_cmd(client: Client, message: Message):
     await send_jumble_rich(client, message.chat.id, caption)
 
 
-# 6. Admin Settings (/sethint, /setpoints, /setimer)
+# 6. Admin Settings via Text Command
 @Client.on_message(filters.command(["sethint", "setpoints", "setimer", "settimer"]))
 async def admin_set_configs(client: Client, message: Message):
     if not await is_admin(message.chat.id, message.from_user.id):
@@ -274,3 +244,42 @@ async def admin_set_configs(client: Client, message: Message):
     elif cmd in ["setimer", "settimer"]:
         set_settings(message.chat.id, diff, val)
         return await message.reply_text(f"✅ `{diff.title()}` round timer set to: `{val}s`")
+
+
+# ============================================================
+# CALLBACKS FOR STATS, LEADERBOARD, POWER SHOP
+# ============================================================
+
+@Client.on_callback_query(filters.regex(r"^(refresh_leaderboard|show_my_stats|buy_shop)"))
+async def basic_callbacks_handler(client: Client, query: CallbackQuery):
+    user_id = query.from_user.id
+    data = query.data
+
+    if data == "refresh_leaderboard":
+        caption, buttons = get_leaderboard_content()
+        blocks = html_to_rich_blocks(caption)
+        for r in buttons:
+            blocks.append(types.InputRichBlockButtons(buttons=r))
+        await query.answer("Leaderboard refreshed!")
+        try:
+            await query.message.edit_rich_message(rich_message=types.InputRichMessage(blocks=blocks))
+        except Exception:
+            pass
+
+    elif data == "show_my_stats":
+        ensure_user(query.from_user)
+        u = get_user(user_id)
+        caption, buttons, slider = get_stats_content(query.from_user, u)
+        blocks = html_to_rich_blocks(caption)
+        if slider:
+            blocks.append(slider)
+        for r in buttons:
+            blocks.append(types.InputRichBlockButtons(buttons=r))
+        await query.answer()
+        try:
+            await query.message.edit_rich_message(rich_message=types.InputRichMessage(blocks=blocks))
+        except Exception:
+            pass
+
+    elif data.startswith("buy_shop"):
+        await query.answer("🛍️ Power Shop jald hi live hoga!", show_alert=True)
