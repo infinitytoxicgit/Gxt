@@ -1,5 +1,4 @@
 import asyncio
-import io
 import os
 import random
 import time
@@ -73,12 +72,12 @@ async def start_game(client: Client, chat_id: int, difficulty: str, message_or_c
     """, (chat_id, difficulty, word, puzzle_id, now, expires, 0))
     DB.commit()
 
+    # Image generator ab standard path return karega
     image_obj = make_puzzle_image(jumbled, difficulty, puzzle_id)
 
-    # Clean Non-Expandable Blockquote
     caption_html = (
-        f"<blockquote>🧩 <b>𝐉ᴜᴍʙʟᴇ #{puzzle_id}</b>\n\n"
-        f"🎯 <b>Difficulty :</b> <code>{difficulty.title()}</code>\n"
+        f"<blockquote>🧩 <u><b>𝐉𝐔𝐌𝐁𝐋𝐄 #{puzzle_id}</b></u></blockquote>\n\n"
+        f"<blockquote>🎯 <b>Difficulty :</b> <code>{difficulty.title()}</code>\n"
         f"⏱️ <b>Time :</b> <code>{timer_val // 60}m {timer_val % 60}s</code>\n"
         f"⭐ <b>Reward :</b> <code>+{reward_pts} Points</code>\n"
         f"⚡ <b>EXP :</b> <code>+{reward_exp} EXP</code>\n"
@@ -92,7 +91,8 @@ async def start_game(client: Client, chat_id: int, difficulty: str, message_or_c
             if isinstance(image_obj, str) and os.path.isfile(image_obj):
                 blocks.append(types.InputRichBlockPhoto(photo=types.InputMediaPhoto(image_obj)))
             elif hasattr(image_obj, "read"):
-                tmp_path = f"tmp_puzzle_{puzzle_id}.png"
+                tmp_path = f"cache/tmp_puzzle_{puzzle_id}.png"
+                os.makedirs("cache", exist_ok=True)
                 if hasattr(image_obj, "seek"):
                     image_obj.seek(0)
                 with open(tmp_path, "wb") as f:
@@ -140,9 +140,9 @@ async def expire_game(client: Client, chat_id: int, puzzle_id: int, expires: flo
 
     try:
         expire_caption = (
-            f"<blockquote>⏰ <b>Time's Up!</b>\n\n"
-            f"❌ <b>Nobody solved it.</b>\n"
-            f"✅ <b>Answer was:</b> <code>{row['word'].upper()}</code>\n\n"
+            f"<blockquote>⏰ <u><b>TIME'S UP!</b></u></blockquote>\n\n"
+            f"<blockquote>❌ <b>Nobody solved it.</b>\n"
+            f"✅ <b>Answer was :</b> <code>{row['word'].upper()}</code>\n\n"
             f"🔄 <i>Next puzzle starting in 3 seconds...</i></blockquote>"
         )
         exp_blocks = html_to_rich_blocks(expire_caption)
@@ -221,7 +221,7 @@ async def check_answer_handler(client: Client, message: Message):
             WHERE user_id = ?
         """, (reward_pts, reward_pts, reward_exp, user.id))
 
-        # Solve history update for 24h, weekly, monthly, and yearly leaderboards
+        # Timeframe Solve History for 24h, 1wk, 1mo, 1yr Leaderboard
         DB.execute(
             "INSERT INTO solve_history (user_id, chat_id, points, timestamp) VALUES (?, ?, ?, ?)",
             (user.id, chat_id, reward_pts, now)
@@ -235,11 +235,11 @@ async def check_answer_handler(client: Client, message: Message):
                 badges.append("⭐ 2x Stars")
             if has_2x_exp:
                 badges.append("⚡ 2x EXP")
-            booster_badge = f"\n🔥 <b>Active Boosters:</b> {' | '.join(badges)}"
+            booster_badge = f"\n🔥 <b>Active Boosters :</b> {' | '.join(badges)}"
 
         win_caption = (
-            f"<blockquote>🎉 <b>PUZZLE SOLVED!</b>\n\n"
-            f"👤 <b>Solver :</b> {user.mention}\n"
+            f"<blockquote>🎉 <u><b>PUZZLE SOLVED!</b></u></blockquote>\n\n"
+            f"<blockquote>👤 <b>Solver :</b> {user.mention}\n"
             f"✅ <b>Word :</b> <code>{correct_word.upper()}</code>\n"
             f"⭐ <b>Stars Earned :</b> <code>+{reward_pts}</code>\n"
             f"⚡ <b>EXP Gained :</b> <code>+{reward_exp}</code>"
@@ -337,8 +337,8 @@ async def puzzle_buttons_listener(client: Client, query: CallbackQuery):
         await query.answer("⏭️ Puzzle skipped successfully!")
 
         skip_caption = (
-            f"<blockquote>⏭️ <b>Puzzle Skipped by Admin!</b>\n\n"
-            f"✅ <b>Word was:</b> <code>{game['word'].upper()}</code>\n"
+            f"<blockquote>⏭️ <u><b>PUZZLE SKIPPED BY ADMIN!</b></u></blockquote>\n\n"
+            f"<blockquote>✅ <b>Word was :</b> <code>{game['word'].upper()}</code>\n"
             f"🔄 <i>Next puzzle starting in 3 seconds...</i></blockquote>"
         )
         exp_blocks = html_to_rich_blocks(skip_caption)
