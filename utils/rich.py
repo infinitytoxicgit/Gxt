@@ -205,15 +205,27 @@ def _resolve_photo_path(photo):
         return photo if os.path.getsize(photo) > 0 else None
     return None
 
+def _create_photo_block(photo_file):
+    if not photo_file or not os.path.isfile(photo_file):
+        return None
+    # Kurigram Native Photo Wrapper Compatibility
+    try:
+        if hasattr(types, "InputRichBlockPhoto"):
+            try:
+                return types.InputRichBlockPhoto(photo=photo_file)
+            except Exception:
+                return types.InputRichBlockPhoto(photo=types.InputMediaPhoto(photo_file))
+    except Exception as e:
+        print(f"[Photo Block Construction Error]: {e}")
+    return None
+
 async def send_jumble_rich(client, chat_id: int, caption_html: str, rich_buttons_rows: list = None, slider_row=None, photo=None):
     blocks = []
 
     photo_file = _resolve_photo_path(photo)
-    if photo_file and os.path.isfile(photo_file):
-        try:
-            blocks.append(types.InputRichBlockPhoto(photo=types.InputMediaPhoto(photo_file)))
-        except Exception:
-            pass
+    p_block = _create_photo_block(photo_file)
+    if p_block:
+        blocks.append(p_block)
 
     blocks.extend(html_to_rich_blocks(caption_html))
     if slider_row:
@@ -233,7 +245,7 @@ async def send_jumble_rich(client, chat_id: int, caption_html: str, rich_buttons
                 rich_message=types.InputRichMessage(blocks=blocks),
             )
     except Exception as e:
-        print(f"[send_jumble_rich Info] Kurigram native rich send failed: {e}")
+        print(f"[send_jumble_rich] Native rich send failed: {e}")
 
     # ATTEMPT 2: Standard Message with rich_message payload
     try:
@@ -243,9 +255,9 @@ async def send_jumble_rich(client, chat_id: int, caption_html: str, rich_buttons
             rich_message=types.InputRichMessage(blocks=blocks)
         )
     except Exception as fe:
-        print(f"[send_jumble_rich Info] Rich blocks fallback failed: {fe}")
+        print(f"[send_jumble_rich] Rich blocks payload failed: {fe}")
 
-    # ATTEMPT 3: Standard Pyrogram fallback if Kurigram is not active
+    # ATTEMPT 3: Standard Pyrogram Fallback
     inline_markup = _convert_to_standard_inline(rich_buttons_rows)
     if photo_file and os.path.isfile(photo_file):
         try:
@@ -266,8 +278,15 @@ async def send_jumble_rich(client, chat_id: int, caption_html: str, rich_buttons
         parse_mode=enums.ParseMode.HTML
     )
 
-async def edit_jumble_rich(client, chat_id: int, message_id: int, caption_html: str, rich_buttons_rows: list = None, slider_row=None):
-    blocks = html_to_rich_blocks(caption_html)
+async def edit_jumble_rich(client, chat_id: int, message_id: int, caption_html: str, rich_buttons_rows: list = None, slider_row=None, photo=None):
+    blocks = []
+
+    photo_file = _resolve_photo_path(photo)
+    p_block = _create_photo_block(photo_file)
+    if p_block:
+        blocks.append(p_block)
+
+    blocks.extend(html_to_rich_blocks(caption_html))
     if slider_row:
         blocks.append(slider_row)
     if rich_buttons_rows:
@@ -299,10 +318,10 @@ async def edit_jumble_rich(client, chat_id: int, message_id: int, caption_html: 
     except Exception:
         pass
 
-    # ATTEMPT 3: Never convert to standard inline! Purana message delete karke fresh Rich send karo
+    # ATTEMPT 3: Never fallback to inline markup! Purana message delete karke fresh Rich send karo
     try:
         await client.delete_messages(chat_id, message_id)
     except Exception:
         pass
 
-    return await send_jumble_rich(client, chat_id, caption_html, rich_buttons_rows, slider_row)
+    return await send_jumble_rich(client, chat_id, caption_html, rich_buttons_rows, slider_row, photo=photo_file)
