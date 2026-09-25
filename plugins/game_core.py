@@ -192,18 +192,28 @@ async def expire_game(client: Client, chat_id: int, puzzle_id: int, expires: flo
 
 
 # ============================================================
-# /word COMMAND HANDLER
+# /word COMMAND HANDLER (DM + Group Friendly)
 # ============================================================
 
-@Client.on_message(filters.command(["word", "words", "puzzle", "current"]) & filters.group, group=0)
+@Client.on_message(filters.command(["word", "words", "puzzle", "current"]), group=0)
 async def current_word_cmd(client: Client, message: Message):
+    if message.chat.type == enums.ChatType.PRIVATE:
+        return await message.reply_text(
+            "ℹ️ <code>/word</code> group ke active puzzle ke liye hota hai.\n"
+            "Bot ko kisi group me add karke <code>/jumble</code> se start karein!",
+            parse_mode=enums.ParseMode.HTML
+        )
+
     chat_id = message.chat.id
     if chat_id in ACTIVE_FIGHTS:
         return await message.reply_text("⚔️ Group me 1v1 Battle chal rahi hai! Current battle rounds play karein.")
 
     game = DB.execute("SELECT * FROM games WHERE chat_id=? AND solved=0", (chat_id,)).fetchone()
     if not game:
-        return await message.reply_text("❌ Abhi koi active puzzle nahi chal raha. `/jumble` se start karein.")
+        return await message.reply_text(
+            "❌ Abhi koi active puzzle nahi chal raha. <code>/jumble</code> se start karein!",
+            parse_mode=enums.ParseMode.HTML
+        )
 
     left = max(0, int(game["expires"] - time.time()))
     diff = game["difficulty"]
