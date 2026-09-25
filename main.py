@@ -1,9 +1,6 @@
 import asyncio
 import os
 import time
-import importlib
-import glob
-import traceback
 from config import API_ID, API_HASH, BOT_TOKEN, OWNER_ID
 from database import DB
 from pyrogram import Client, idle, enums
@@ -12,38 +9,9 @@ app = Client(
     "advanced_jumble_bot",
     api_id=API_ID,
     api_hash=API_HASH,
-    bot_token=BOT_TOKEN
+    bot_token=BOT_TOKEN,
+    plugins=dict(root="plugins")
 )
-
-def wrap_handler(func):
-    async def wrapper(client, update, *args, **kwargs):
-        try:
-            return await func(client, update, *args, **kwargs)
-        except Exception as e:
-            print(f"\n🔥 CRASH IN [{func.__name__}]: {e}")
-            traceback.print_exc()
-    return wrapper
-
-def load_all_plugins():
-    print("📦 Loading and binding all plugins to app...")
-    plugin_files = glob.glob("plugins/*.py")
-    for file_path in plugin_files:
-        module_name = file_path.replace("/", ".").replace("\\", ".")[:-3]
-        if module_name.endswith("__init__"):
-            continue
-        try:
-            mod = importlib.import_module(module_name)
-            count = 0
-            for attr in dir(mod):
-                obj = getattr(mod, attr)
-                if hasattr(obj, "handlers"):
-                    for handler, group in getattr(obj, "handlers"):
-                        handler.callback = wrap_handler(handler.callback)
-                        app.add_handler(handler, group)
-                        count += 1
-            print(f"  ✅ {module_name} linked successfully ({count} handlers bound)")
-        except Exception as e:
-            print(f"  ❌ Error loading {module_name}: {e}")
 
 async def auto_backup_task():
     await asyncio.sleep(10)
@@ -86,17 +54,15 @@ async def resume_all_active_games():
     except Exception as err:
         print(f"[Resume Query Error]: {err}")
 
-@app.on_message(group=-1)
-async def incoming_update_tracker(client, message):
-    chat_type = str(message.chat.type).replace("ChatType.", "")
-    sender = message.from_user.first_name if message.from_user else "Unknown"
-    text = message.text or "[Non-text message]"
-    print(f"📨 [RECEIVE] Chat: {message.chat.id} ({chat_type}) | User: {sender} | Msg: {text}")
+# Live logger (group=-100 ensures it never blocks any command)
+@app.on_message(group=-100)
+async def incoming_tracker(client, message):
+    if message.text and message.text.startswith(("/", "!", ".")):
+        print(f"⚡ [COMMAND RECEIVED]: {message.text} | Chat: {message.chat.id}")
     message.continue_propagation()
 
 async def main():
     print("🚀 Modular Jumble Bot Starting...")
-    load_all_plugins()
     await app.start()
     bot_me = await app.get_me()
     print(f"✅ Bot Online as @{bot_me.username} (ID: {bot_me.id})")
