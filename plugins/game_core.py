@@ -82,7 +82,6 @@ async def start_game(client: Client, chat_id: int, difficulty: str, message_or_c
     if old_game and settings.get("auto_delete") and old_game["message_id"]:
         await safe_delete_and_unpin(client, chat_id, old_game["message_id"])
 
-    # Clear old active puzzle row cleanly
     DB.execute("DELETE FROM games WHERE chat_id=?", (chat_id,))
 
     word = choose_word(chat_id, difficulty)
@@ -192,15 +191,15 @@ async def expire_game(client: Client, chat_id: int, puzzle_id: int, expires: flo
 
 
 # ============================================================
-# /word COMMAND HANDLER (DM + Group Friendly)
+# /word COMMAND HANDLER (DM + Group Supported)
 # ============================================================
 
-@Client.on_message(filters.command(["word", "words", "puzzle", "current"]), group=0)
+@Client.on_message(filters.command(["word", "words", "puzzle", "current"]))
 async def current_word_cmd(client: Client, message: Message):
     if message.chat.type == enums.ChatType.PRIVATE:
         return await message.reply_text(
             "ℹ️ <code>/word</code> group ke active puzzle ke liye hota hai.\n"
-            "Bot ko kisi group me add karke <code>/jumble</code> se start karein!",
+            "Bot ko kisi group me add karke <code>/jumble</code> run karein!",
             parse_mode=enums.ParseMode.HTML
         )
 
@@ -237,7 +236,6 @@ async def puzzle_buttons_listener(client: Client, query: CallbackQuery):
     data = query.data.split("|")
     action = data[0]
 
-    # 1. HINT
     if action in ["game_hint", "hint"]:
         ensure_user(query.from_user)
         game = DB.execute("SELECT * FROM games WHERE chat_id=? AND solved=0", (chat_id,)).fetchone()
@@ -276,7 +274,6 @@ async def puzzle_buttons_listener(client: Client, query: CallbackQuery):
         letter = word[idx].upper()
         return await query.answer(f"💡 Letter #{idx + 1} is: '{letter}' ({hint_limit - hints_used} hints left)", show_alert=True)
 
-    # 2. SKIP (Admins / Owner Only)
     elif action in ["game_skip", "skip"]:
         is_adm = await check_admin_safe(query.message.chat, user_id)
         if not is_adm:
@@ -317,7 +314,6 @@ async def puzzle_buttons_listener(client: Client, query: CallbackQuery):
             next_diff = s.get("default_diff") or "medium"
             asyncio.create_task(start_game(client, chat_id, next_diff, chat_id))
 
-    # 3. NEW WORD
     elif action in ["game_newword", "newword"]:
         game = DB.execute("SELECT * FROM games WHERE chat_id=? AND solved=0", (chat_id,)).fetchone()
         if game and time.time() <= game["expires"]:
