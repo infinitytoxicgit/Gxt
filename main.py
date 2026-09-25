@@ -9,7 +9,7 @@ import traceback
 from config import API_ID, API_HASH, BOT_TOKEN, OWNER_ID
 from database import DB
 from pyrogram import Client, idle, enums
-from pyrogram.handlers import CallbackQueryHandler, MessageHandler
+from pyrogram.handlers import CallbackQueryHandler
 
 app = Client(
     "advanced_jumble_bot",
@@ -18,49 +18,10 @@ app = Client(
     bot_token=BOT_TOKEN
 )
 
-async def auto_backup_task():
-    await asyncio.sleep(10)
-    while True:
-        try:
-            DB.commit()
-            if os.path.exists("jumble_game.db"):
-                await app.send_document(
-                    chat_id=int(OWNER_ID),
-                    document="jumble_game.db",
-                    caption=f"🤖 <b>Auto Backup:</b> <code>{time.strftime('%Y-%m-%d %H:%M:%S')}</code>",
-                    parse_mode=enums.ParseMode.HTML
-                )
-        except Exception as e:
-            print(f"[Auto Backup Error]: {e}")
-        await asyncio.sleep(21600)
-
-async def resume_all_active_games():
-    from plugins.game_core import start_game
-    from helpers import ACTIVE_FIGHTS
-
-    await asyncio.sleep(3)
-    try:
-        rows = DB.execute("SELECT chat_id, default_diff FROM settings WHERE is_active = 1 AND chat_id != 0").fetchall()
-        for row in rows:
-            c_id = row["chat_id"]
-            diff = row["default_diff"] or "easy"
-            if c_id in ACTIVE_FIGHTS:
-                continue
-            try:
-                # Active puzzle clear karke clean fresh start
-                DB.execute("DELETE FROM games WHERE chat_id=?", (c_id,))
-                DB.commit()
-                await start_game(app, c_id, diff, c_id)
-                await asyncio.sleep(0.5)
-            except Exception as e:
-                print(f"[Auto-Resume Error in {c_id}]: {e}")
-    except Exception as err:
-        print(f"[Resume Query Error]: {err}")
-
 # =========================================================================
-# DIRECT MASTER ROUTER: A to Z COMMANDS (Single Authority Execution)
+# ABSOLUTE MASTER COMMAND ROUTER
 # =========================================================================
-@app.on_message(group=-1)
+@app.on_message(group=-2)
 async def direct_master_router(client, message):
     if not message.text:
         return
@@ -77,259 +38,112 @@ async def direct_master_router(client, message):
     first_token = raw.split()[0]
     cmd = "/" + first_token[1:].lower().split("@")[0]
 
-    # ==============================
-    # DUAL MODE TOGGLES (/rich, /inline)
-    # ==============================
+    # --- UI MODE TOGGLES ---
     if cmd in ("/rich", "/setrich"):
-        try:
-            from utils.rich import set_ui_mode
-            set_ui_mode("rich")
-            return await message.reply_text(
-                "<blockquote>✨ <b>UI MODE UPDATED: RICH BLOCKS ACTIVATED</b>\n\n"
-                "• Saare Game Puzzles, Leaderboards, Stats, Shop aur Settings ab native <b>Rich UI Blocks</b> me aayenge!</blockquote>",
-                parse_mode=enums.ParseMode.HTML
-            )
-        except Exception as e:
-            return await message.reply_text(f"❌ Error setting rich mode: {e}")
+        from utils.rich import set_ui_mode
+        set_ui_mode("rich")
+        return await message.reply_text("<blockquote>✨ <b>RICH MODE ACTIVATED</b>\nAb se saare buttons native Rich Block me render honge!</blockquote>", parse_mode=enums.ParseMode.HTML)
 
     if cmd in ("/inline", "/setinline"):
-        try:
-            from utils.rich import set_ui_mode
-            set_ui_mode("inline")
-            return await message.reply_text(
-                "<blockquote>🔘 <b>UI MODE UPDATED: STANDARD INLINE ACTIVATED</b>\n\n"
-                "• Saare Game Puzzles, Leaderboards, Stats, Shop aur Settings ab standard <b>Inline Buttons</b> me aayenge!</blockquote>",
-                parse_mode=enums.ParseMode.HTML
-            )
-        except Exception as e:
-            return await message.reply_text(f"❌ Error setting inline mode: {e}")
+        from utils.rich import set_ui_mode
+        set_ui_mode("inline")
+        return await message.reply_text("<blockquote>🔘 <b>INLINE MODE ACTIVATED</b>\nAb se saare buttons classic inline me render honge!</blockquote>", parse_mode=enums.ParseMode.HTML)
 
-    # 1. CORE JUMBLE GAME COMMANDS
-    if cmd in ("/jumble", "/startgame", "/play"):
+    # --- CALCULATE ---
+    if cmd in ("/calculate", "/calc", "/math"):
+        expr = raw[len(first_token):].strip()
+        if not expr:
+            return await message.reply_text("🧮 <b>Usage:</b> <code>/calculate 25 * 4 + 10</code>", parse_mode=enums.ParseMode.HTML)
+        allowed = set("0123456789+-*/(). %^")
+        if not all(c in allowed for c in expr):
+            return await message.reply_text("❌ Sirf basic math allowed hai!")
         try:
-            from plugins.game_core import start_game_cmd
-            await start_game_cmd(client, message)
+            ans = eval(expr.replace("^", "**"), {"__builtins__": None}, {})
+            from utils.rich import send_jumble_rich
+            return await send_jumble_rich(client, message.chat.id, f"<blockquote>🧮 <b>Result :</b> <code>{ans}</code></blockquote>")
         except Exception as e:
-            print(f"🔥 Error in {cmd}: {e}")
-        return
+            return await message.reply_text(f"❌ Error: <code>{e}</code>", parse_mode=enums.ParseMode.HTML)
 
-    if cmd in ("/puzzle", "/current", "/puz"):
-        try:
-            from plugins.game_core import puzzle_cmd
-            await puzzle_cmd(client, message)
-        except Exception as e:
-            print(f"🔥 Error in {cmd}: {e}")
-        return
-
-    if cmd in ("/skip", "/next"):
-        try:
-            from plugins.game_core import skip_cmd
-            await skip_cmd(client, message)
-        except Exception as e:
-            print(f"🔥 Error in {cmd}: {e}")
-        return
-
-    if cmd in ("/end", "/stop", "/stopgame"):
-        try:
-            from plugins.game_core import end_game_cmd
-            await end_game_cmd(client, message)
-        except Exception as e:
-            print(f"🔥 Error in {cmd}: {e}")
-        return
-
-    # 2. POWER SHOP COMMANDS
-    if cmd in ("/shop", "/powershop", "/store", "/power"):
-        try:
-            from plugins.shop import open_shop_cmd
-            await open_shop_cmd(client, message)
-        except Exception as e:
-            print(f"🔥 Error in {cmd}: {e}")
-        return
-
-    # 3. WORDS BANK COMMANDS
-    if cmd in ("/word", "/words", "/wordbank"):
-        try:
-            from plugins.words import words_panel_cmd
-            await words_panel_cmd(client, message)
-        except Exception as e:
-            print(f"🔥 Error in {cmd}: {e}")
-        return
-
-    if cmd in ("/addword", "/addwords"):
-        try:
-            from plugins.words import bulk_add_words_cmd
-            await bulk_add_words_cmd(client, message)
-        except Exception as e:
-            print(f"🔥 Error in {cmd}: {e}")
-        return
-
-    if cmd in ("/delword", "/delwords", "/remword"):
-        try:
-            from plugins.words import bulk_del_words_cmd
-            await bulk_del_words_cmd(client, message)
-        except Exception as e:
-            print(f"🔥 Error in {cmd}: {e}")
-        return
-
-    # 4. LEADERBOARDS & RANKINGS
-    if cmd in ("/leaderboard", "/lb", "/top", "/ranks"):
-        try:
-            from plugins.basic import leaderboard_cmd
-            await leaderboard_cmd(client, message)
-        except Exception as e:
-            print(f"🔥 Error in {cmd}: {e}")
-            traceback.print_exc()
-        return
-
-    # 5. USER PROFILE & STATS
-    if cmd in ("/stats", "/mystats", "/profile", "/me", "/score"):
+    # --- STATS ---
+    if cmd in ("/stats", "/mystats", "/profile", "/score"):
         try:
             from plugins.basic import stats_cmd
-            await stats_cmd(client, message)
+            return await stats_cmd(client, message)
         except Exception as e:
-            print(f"🔥 Error in {cmd}: {e}")
+            print(f"[Stats Error]: {e}")
             traceback.print_exc()
-        return
+            return await message.reply_text(f"❌ Stats error: {e}")
 
-    # 6. GROUP SETTINGS & CONFIGURATION
-    if cmd in ("/settings", "/setting", "/config"):
+    # --- LEADERBOARD ---
+    if cmd in ("/leaderboard", "/lb", "/top"):
         try:
-            from plugins.settings import settings_cmd
-            await settings_cmd(client, message)
+            from plugins.basic import leaderboard_cmd
+            return await leaderboard_cmd(client, message)
         except Exception as e:
-            print(f"🔥 Error in {cmd}: {e}")
-        return
-
-    # 7. DAILY REWARD & GROUP BONUS
-    if cmd in ("/daily", "/claim", "/reward"):
-        try:
-            from plugins.basic import daily_cmd
-            await daily_cmd(client, message)
-        except Exception as e:
-            print(f"🔥 Error in {cmd}: {e}")
-        return
-
-    if cmd in ("/bonus",):
-        try:
-            from plugins.basic import group_bonus_cmd
-            await group_bonus_cmd(client, message)
-        except Exception as e:
-            print(f"🔥 Error in {cmd}: {e}")
-        return
-
-    # 8. 1v1 FIGHT & DUEL
-    if cmd in ("/fight", "/duel", "/challenge"):
-        try:
-            from plugins.fight import fight_challenge_cmd
-            await fight_challenge_cmd(client, message)
-        except Exception as e:
-            print(f"🔥 Error in {cmd}: {e}")
-        return
-
-    if cmd in ("/surrender", "/ff", "/cancelfight"):
-        try:
-            from plugins.fight import surrender_fight_cmd
-            await surrender_fight_cmd(client, message)
-        except Exception as e:
-            print(f"🔥 Error in {cmd}: {e}")
-        return
-
-    # 9. START & HELP
-    if cmd in ("/start", "/help", "/rules"):
-        try:
-            from plugins.start import start_cmd
-            await start_cmd(client, message)
-        except Exception as e:
-            print(f"🔥 Error in {cmd}: {e}")
-        return
-
-    # 10. BASIC & CALCULATOR ENGINE
-    if cmd in ("/calculate", "/calc", "/math"):
-        try:
-            from plugins.basic import calculate_cmd
-            await calculate_cmd(client, message)
-        except Exception as e:
-            print(f"🔥 Error in {cmd}: {e}")
+            print(f"[Leaderboard Error]: {e}")
             traceback.print_exc()
+            return
+
+    # --- GAME CONTROLS ---
+    if cmd in ("/jumble", "/startgame"):
+        from plugins.game_core import start_game_cmd
+        return await start_game_cmd(client, message)
+
+    if cmd in ("/puzzle", "/current"):
+        from plugins.game_core import puzzle_cmd
+        return await puzzle_cmd(client, message)
+
+    if cmd in ("/skip", "/next"):
+        from plugins.game_core import skip_cmd
+        return await skip_cmd(client, message)
+
+    if cmd in ("/end", "/stop"):
+        from plugins.game_core import end_game_cmd
+        return await end_game_cmd(client, message)
+
+    # --- SHOP & WORDS & SETTINGS ---
+    if cmd in ("/shop", "/powershop", "/store"):
+        from plugins.shop import open_shop_cmd
+        return await open_shop_cmd(client, message)
+
+    if cmd in ("/word", "/words", "/wordbank"):
+        from plugins.words import words_panel_cmd
+        return await words_panel_cmd(client, message)
+
+    if cmd in ("/settings", "/setting"):
+        from plugins.settings import settings_cmd
+        return await settings_cmd(client, message)
+
+    if cmd in ("/update", "/restart"):
+        await message.reply_text("🔄 <b>Restarting...</b>", parse_mode=enums.ParseMode.HTML)
+        os.system("git pull")
+        time.sleep(1)
+        os.execl(sys.executable, sys.executable, *sys.argv)
         return
 
-    # 11. ADMIN, UPDATE & CLEAN REBOOT
-    if cmd in ("/update", "/pull", "/restart", "/reboot"):
-        try:
-            await message.reply_text("🔄 <b>Pulling latest changes and rebooting instance...</b>", parse_mode=enums.ParseMode.HTML)
-            os.system("git pull")
-            time.sleep(1)
-            python_bin = sys.executable
-            os.execl(python_bin, python_bin, *sys.argv)
-        except Exception as e:
-            print(f"🔥 Error in {cmd}: {e}")
-            traceback.print_exc()
-        return
-
-    if cmd in ("/broadcast", "/gcast"):
-        try:
-            from plugins.admin import broadcast_cmd
-            await broadcast_cmd(client, message)
-        except Exception as e:
-            print(f"🔥 Error in {cmd}: {e}")
-        return
-
-    if cmd in ("/backup", "/dbbackup"):
-        try:
-            from plugins import backup
-            backup_fn = getattr(backup, "manual_backup_cmd", getattr(backup, "backup_cmd", None))
-            if backup_fn:
-                await backup_fn(client, message)
-            else:
-                if os.path.exists("jumble_game.db"):
-                    await client.send_document(message.chat.id, "jumble_game.db", caption="📦 <b>Current SQLite Database</b>")
-        except Exception as e:
-            print(f"🔥 Error in {cmd}: {e}")
-        return
-
-    if cmd in ("/setexp", "/setstars", "/setpoints", "/resetuser"):
-        try:
-            from plugins.admin import admin_manage_user_cmd
-            await admin_manage_user_cmd(client, message)
-        except Exception as e:
-            print(f"🔥 Error in {cmd}: {e}")
-        return
-
-
-async def register_plugins():
-    print("📦 Explicitly Registering All Callback Handlers...")
+async def register_callbacks_only():
     plugin_files = sorted(glob.glob("plugins/*.py"))
     for file_path in plugin_files:
         mod_name = file_path.replace("/", ".").replace("\\", ".")[:-3]
-        if mod_name.endswith("__init__"):
-            continue
+        if mod_name.endswith("__init__"): continue
         try:
             mod = importlib.import_module(mod_name)
             for attr_name in dir(mod):
                 attr = getattr(mod, attr_name)
-                # Register ALL CallbackQueryHandler safely
                 if hasattr(attr, "handlers") and isinstance(getattr(attr, "handlers"), list):
                     for handler, group in getattr(attr, "handlers"):
                         if isinstance(handler, CallbackQueryHandler):
                             res = app.add_handler(handler, group)
-                            if inspect.isawaitable(res):
-                                await res
-            print(f"  ✅ {mod_name:<25} ready")
+                            if inspect.isawaitable(res): await res
         except Exception as e:
-            print(f"  ❌ Error loading {mod_name}: {e}")
-
+            print(f"Error loading callback from {mod_name}: {e}")
 
 async def main():
-    print("🚀 Modular Jumble Bot Starting...")
+    print("🚀 Bot starting...")
     await app.start()
-    bot_me = await app.get_me()
-    print(f"✅ Bot Online as @{bot_me.username} (ID: {bot_me.id})")
-
-    await register_plugins()
-
-    asyncio.create_task(resume_all_active_games())
-    asyncio.create_task(auto_backup_task())
-
+    me = await app.get_me()
+    print(f"✅ Online as @{me.username}")
+    await register_callbacks_only()
     await idle()
     await app.stop()
 
