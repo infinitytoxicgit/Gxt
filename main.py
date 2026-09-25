@@ -8,6 +8,7 @@ import traceback
 from config import API_ID, API_HASH, BOT_TOKEN, OWNER_ID
 from database import DB
 from pyrogram import Client, idle, enums
+from pyrogram.handlers import CallbackQueryHandler, MessageHandler
 
 app = Client(
     "advanced_jumble_bot",
@@ -55,17 +56,15 @@ async def resume_all_active_games():
         print(f"[Resume Query Error]: {err}")
 
 # =========================================================================
-# DIRECT MASTER ROUTER: A to Z COMMAND MATRIX
+# DIRECT MASTER ROUTER: A to Z COMMANDS (Single Authority Execution)
 # =========================================================================
-@app.on_message()
+@app.on_message(group=-1)
 async def direct_master_router(client, message):
     if not message.text:
         return
 
     raw = message.text.strip()
-    # Normalize prefixes: /, !, .
     if not (raw.startswith("/") or raw.startswith("!") or raw.startswith(".")):
-        # Message is an answer candidate -> Route to answers plugin
         try:
             from plugins.answers import group_answer_handler
             await group_answer_handler(client, message)
@@ -73,7 +72,6 @@ async def direct_master_router(client, message):
             pass
         return
 
-    # Extract command without prefix and without @bot_username
     first_token = raw.split()[0]
     cmd = "/" + first_token[1:].lower().split("@")[0]
 
@@ -84,7 +82,6 @@ async def direct_master_router(client, message):
             await start_game_cmd(client, message)
         except Exception as e:
             print(f"🔥 Error in {cmd}: {e}")
-            traceback.print_exc()
         return
 
     if cmd in ("/puzzle", "/current", "/puz"):
@@ -93,7 +90,6 @@ async def direct_master_router(client, message):
             await puzzle_cmd(client, message)
         except Exception as e:
             print(f"🔥 Error in {cmd}: {e}")
-            traceback.print_exc()
         return
 
     if cmd in ("/skip", "/next"):
@@ -102,7 +98,6 @@ async def direct_master_router(client, message):
             await skip_cmd(client, message)
         except Exception as e:
             print(f"🔥 Error in {cmd}: {e}")
-            traceback.print_exc()
         return
 
     if cmd in ("/end", "/stop", "/stopgame"):
@@ -111,17 +106,15 @@ async def direct_master_router(client, message):
             await end_game_cmd(client, message)
         except Exception as e:
             print(f"🔥 Error in {cmd}: {e}")
-            traceback.print_exc()
         return
 
-    # 2. POWER SHOP COMMANDS
+    # 2. POWER SHOP COMMANDS (Executed ONCE Only)
     if cmd in ("/shop", "/powershop", "/store", "/power"):
         try:
             from plugins.shop import open_shop_cmd
             await open_shop_cmd(client, message)
         except Exception as e:
             print(f"🔥 Error in {cmd}: {e}")
-            traceback.print_exc()
         return
 
     # 3. WORDS BANK COMMANDS
@@ -131,36 +124,29 @@ async def direct_master_router(client, message):
             await words_panel_cmd(client, message)
         except Exception as e:
             print(f"🔥 Error in {cmd}: {e}")
-            traceback.print_exc()
         return
 
     if cmd in ("/addword", "/addwords"):
         try:
-            from plugins.words import add_word_cmd
-            await add_word_cmd(client, message)
+            from plugins.words import bulk_add_words_cmd
+            await bulk_add_words_cmd(client, message)
         except Exception as e:
             print(f"🔥 Error in {cmd}: {e}")
-            traceback.print_exc()
         return
 
     if cmd in ("/delword", "/delwords", "/remword"):
         try:
-            from plugins.words import del_word_cmd
-            await del_word_cmd(client, message)
+            from plugins.words import bulk_del_words_cmd
+            await bulk_del_words_cmd(client, message)
         except Exception as e:
             print(f"🔥 Error in {cmd}: {e}")
-            traceback.print_exc()
         return
 
     # 4. LEADERBOARDS & RANKINGS
     if cmd in ("/leaderboard", "/lb", "/top", "/ranks"):
         try:
-            try:
-                from plugins.leaderboard import leaderboard_cmd
-                await leaderboard_cmd(client, message)
-            except ImportError:
-                from plugins.basic import leaderboard_cmd
-                await leaderboard_cmd(client, message)
+            from plugins.basic import leaderboard_cmd
+            await leaderboard_cmd(client, message)
         except Exception as e:
             print(f"🔥 Error in {cmd}: {e}")
             traceback.print_exc()
@@ -183,17 +169,23 @@ async def direct_master_router(client, message):
             await settings_cmd(client, message)
         except Exception as e:
             print(f"🔥 Error in {cmd}: {e}")
-            traceback.print_exc()
         return
 
-    # 7. DAILY REWARD & STREAKS
+    # 7. DAILY REWARD & GROUP BONUS
     if cmd in ("/daily", "/claim", "/reward"):
         try:
-            from plugins.daily import daily_reward_cmd
-            await daily_reward_cmd(client, message)
+            from plugins.basic import daily_cmd
+            await daily_cmd(client, message)
         except Exception as e:
             print(f"🔥 Error in {cmd}: {e}")
-            traceback.print_exc()
+        return
+
+    if cmd in ("/bonus",):
+        try:
+            from plugins.basic import group_bonus_cmd
+            await group_bonus_cmd(client, message)
+        except Exception as e:
+            print(f"🔥 Error in {cmd}: {e}")
         return
 
     # 8. 1v1 FIGHT & DUEL
@@ -203,7 +195,6 @@ async def direct_master_router(client, message):
             await fight_challenge_cmd(client, message)
         except Exception as e:
             print(f"🔥 Error in {cmd}: {e}")
-            traceback.print_exc()
         return
 
     if cmd in ("/surrender", "/ff", "/cancelfight"):
@@ -212,7 +203,6 @@ async def direct_master_router(client, message):
             await surrender_fight_cmd(client, message)
         except Exception as e:
             print(f"🔥 Error in {cmd}: {e}")
-            traceback.print_exc()
         return
 
     # 9. START & HELP
@@ -222,10 +212,9 @@ async def direct_master_router(client, message):
             await start_cmd(client, message)
         except Exception as e:
             print(f"🔥 Error in {cmd}: {e}")
-            traceback.print_exc()
         return
 
-    # 10. BASIC & MATH / CALCULATE
+    # 10. BASIC & CALCULATOR
     if cmd in ("/calculate", "/calc", "/math"):
         try:
             from plugins.basic import calculate_cmd
@@ -235,58 +224,9 @@ async def direct_master_router(client, message):
             traceback.print_exc()
         return
 
-    if cmd in ("/ping", "/alive"):
-        try:
-            from plugins.basic import ping_cmd
-            await ping_cmd(client, message)
-        except Exception as e:
-            print(f"🔥 Error in {cmd}: {e}")
-            traceback.print_exc()
-        return
-
-    # 11. ADMIN & OWNER OPERATIONS
-    if cmd in ("/broadcast", "/gcast"):
-        try:
-            from plugins.admin import broadcast_cmd
-            await broadcast_cmd(client, message)
-        except Exception as e:
-            print(f"🔥 Error in {cmd}: {e}")
-            traceback.print_exc()
-        return
-
-    if cmd in ("/update", "/pull", "/restart"):
-        try:
-            from plugins.admin import update_bot_cmd
-            await update_bot_cmd(client, message)
-        except Exception as e:
-            print(f"🔥 Error in {cmd}: {e}")
-            traceback.print_exc()
-        return
-
-    if cmd in ("/backup", "/dbbackup"):
-        try:
-            from plugins.backup import manual_backup_cmd
-            await manual_backup_cmd(client, message)
-        except Exception as e:
-            print(f"🔥 Error in {cmd}: {e}")
-            traceback.print_exc()
-        return
-
-    if cmd in ("/setexp", "/setstars", "/setpoints", "/resetuser"):
-        try:
-            from plugins.admin import admin_manage_user_cmd
-            await admin_manage_user_cmd(client, message)
-        except Exception as e:
-            print(f"🔥 Error in {cmd}: {e}")
-            traceback.print_exc()
-        return
-
-    # 12. UNMATCHED COMMAND FALLBACK TO REGISTERED HANDLERS
-    message.continue_propagation()
-
 
 async def register_plugins():
-    print("📦 Explicitly Registering All Plugins & Callback Handlers...")
+    print("📦 Explicitly Registering All Callback Handlers...")
     plugin_files = sorted(glob.glob("plugins/*.py"))
     for file_path in plugin_files:
         mod_name = file_path.replace("/", ".").replace("\\", ".")[:-3]
@@ -296,15 +236,17 @@ async def register_plugins():
             mod = importlib.import_module(mod_name)
             for attr_name in dir(mod):
                 attr = getattr(mod, attr_name)
-                # Register callback queries and other handlers
+                # Register ALL CallbackQueryHandler safely
                 if hasattr(attr, "handlers") and isinstance(getattr(attr, "handlers"), list):
                     for handler, group in getattr(attr, "handlers"):
-                        res = app.add_handler(handler, group)
-                        if inspect.isawaitable(res):
-                            await res
+                        if isinstance(handler, CallbackQueryHandler):
+                            res = app.add_handler(handler, group)
+                            if inspect.isawaitable(res):
+                                await res
             print(f"  ✅ {mod_name:<25} ready")
         except Exception as e:
             print(f"  ❌ Error loading {mod_name}: {e}")
+
 
 async def main():
     print("🚀 Modular Jumble Bot Starting...")
