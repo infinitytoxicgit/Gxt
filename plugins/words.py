@@ -42,7 +42,7 @@ async def can_manage_words(client: Client, message: Message) -> tuple[bool, str]
     if is_owner(user_id) or is_authed(user_id):
         return True, ""
 
-    # 3. Private DM check
+    # 3. Private DM check (Allow Owner/Auth, block random users)
     if message.chat.type == enums.ChatType.PRIVATE:
         return False, "❌ DM me sirf Bot Owner aur Authorized users hi words manage kar sakte hain."
 
@@ -87,7 +87,7 @@ def build_words_page(difficulty: str, page: int = 1):
     caption = (
         f"<blockquote>📚 <u><b>{difficulty.upper()} WORDS BANK (Page {page}/{total_pages})</b></u>\n\n"
         f"Total Words in Database : <b>{total_words}</b>\n"
-        f"💡 <i>Tap any word to copy instantly!</i></blockquote>\n\n"
+        f"💡 <i>Tap any word code block to copy instantly!</i></blockquote>\n\n"
         f"<blockquote>{words_body}</blockquote>\n\n"
         "<blockquote>➕ <b>Bulk Add :</b> <code>/addword [mode] word1 word2 word3</code>\n"
         "➖ <b>Bulk Del :</b> <code>/delword [mode] word1 word2 word3</code></blockquote>"
@@ -117,10 +117,10 @@ def build_words_page(difficulty: str, page: int = 1):
 
 
 # ============================================================
-# WORDS BANK PANEL VIEWER (/wordbank, /wordsbank)
+# WORDS BANK PANEL VIEWER (/word, /words, /wordbank)
 # ============================================================
 
-@Client.on_message(filters.command(["wordbank", "wordsbank", "jumblewords"], prefixes=["/", "!", "."]))
+@Client.on_message(filters.command(["word", "words", "wordbank", "wordsbank", "jumblewords"], prefixes=["/", "!", "."]))
 async def words_panel_cmd(client: Client, message: Message):
     allowed, err_text = await can_manage_words(client, message)
     if not allowed:
