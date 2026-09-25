@@ -16,7 +16,7 @@ from image_gen import make_puzzle_image
 from pyrogram import Client, filters, enums, types
 from pyrogram.types import CallbackQuery, Message
 from word_bank import choose_word, jumble_word
-from utils.rich import html_to_rich_blocks
+from utils.rich import html_to_rich_blocks, send_jumble_rich
 
 
 async def check_admin_safe(chat, user_id: int) -> bool:
@@ -43,29 +43,25 @@ async def check_admin_safe(chat, user_id: int) -> bool:
 
 def rich_game_buttons(puzzle_id: int):
     return [
-        types.InputRichBlockButtons(
-            buttons=[
-                types.RichMessageButton(
-                    text="💡 𝐇ɪɴᴛ",
-                    style=enums.ButtonStyle.PRIMARY,
-                    callback_data=f"game_hint|{puzzle_id}",
-                ),
-                types.RichMessageButton(
-                    text="⏭️ 𝐒ᴋɪᴘ",
-                    style=enums.ButtonStyle.DANGER,
-                    callback_data=f"game_skip|{puzzle_id}",
-                ),
-            ]
-        ),
-        types.InputRichBlockButtons(
-            buttons=[
-                types.RichMessageButton(
-                    text="🆕 𝐍ᴇᴡ 𝐖ᴏʀᴅ",
-                    style=enums.ButtonStyle.SUCCESS,
-                    callback_data="game_newword",
-                ),
-            ]
-        ),
+        [
+            types.RichMessageButton(
+                text="💡 𝐇ɪɴᴛ",
+                style=enums.ButtonStyle.PRIMARY,
+                callback_data=f"game_hint|{puzzle_id}",
+            ),
+            types.RichMessageButton(
+                text="⏭️ 𝐒ᴋɪᴘ",
+                style=enums.ButtonStyle.DANGER,
+                callback_data=f"game_skip|{puzzle_id}",
+            ),
+        ],
+        [
+            types.RichMessageButton(
+                text="🆕 𝐍ᴇᴡ 𝐖ᴏʀᴅ",
+                style=enums.ButtonStyle.SUCCESS,
+                callback_data="game_newword",
+            ),
+        ]
     ]
 
 
@@ -88,11 +84,10 @@ async def start_game(client: Client, chat_id: int, difficulty: str, message_or_c
     jumbled = jumble_word(word)
     puzzle_id = random.randint(10000, 99999)
     now = time.time()
-    
-    # Easy timer default 30 seconds
+
     default_timer = 30 if difficulty.lower() == "easy" else 60
     timer_val = int(settings.get(difficulty.lower(), default_timer))
-    
+
     reward_pts = int(get_global_config(f"points_{difficulty}", 10))
     reward_exp = int(get_global_config(f"exp_{difficulty}", 15))
     hint_limit = int(get_global_config(f"hints_{difficulty}", 3))
@@ -117,35 +112,16 @@ async def start_game(client: Client, chat_id: int, difficulty: str, message_or_c
         f"<blockquote>🔀 <i>Unscramble the letters & type in chat!</i></blockquote>"
     )
 
-    blocks = []
-    if image_obj:
-        try:
-            if isinstance(image_obj, str) and os.path.isfile(image_obj):
-                blocks.append(types.InputRichBlockPhoto(photo=types.InputMediaPhoto(image_obj)))
-            elif hasattr(image_obj, "read"):
-                tmp_path = f"cache/tmp_puzzle_{puzzle_id}.png"
-                os.makedirs("cache", exist_ok=True)
-                if hasattr(image_obj, "seek"):
-                    image_obj.seek(0)
-                with open(tmp_path, "wb") as f:
-                    f.write(image_obj.read())
-                blocks.append(types.InputRichBlockPhoto(photo=types.InputMediaPhoto(tmp_path)))
-        except Exception as err:
-            print(f"Photo Block Error: {err}")
-
-    blocks.extend(html_to_rich_blocks(caption_html))
-    blocks.extend(rich_game_buttons(puzzle_id))
+    buttons = rich_game_buttons(puzzle_id)
 
     try:
-        sent = await client.send_rich_message(
-            chat_id=chat_id,
-            rich_message=types.InputRichMessage(blocks=blocks)
-        )
-        DB.execute("UPDATE games SET message_id=? WHERE chat_id=?", (sent.id, chat_id))
-        DB.commit()
-        await safe_pin_and_clean(client, chat_id, sent.id)
+        sent = await send_jumble_rich(client, chat_id, caption_html, buttons, photo=image_obj)
+        if sent:
+            DB.execute("UPDATE games SET message_id=? WHERE chat_id=?", (sent.id, chat_id))
+            DB.commit()
+            await safe_pin_and_clean(client, chat_id, sent.id)
     except Exception as e:
-        print(f"Error sending rich puzzle: {e}")
+        print(f"[start_game Dispatch Error]: {e}")
 
     asyncio.create_task(expire_game(client, chat_id, puzzle_id, expires))
 
@@ -176,11 +152,7 @@ async def expire_game(client: Client, chat_id: int, puzzle_id: int, expires: flo
             f"✅ <b>Answer was :</b> <code>{row['word'].upper()}</code>\n\n"
             f"🔄 <i>Next puzzle starting in 1 second...</i></blockquote>"
         )
-        exp_blocks = html_to_rich_blocks(expire_caption)
-        exp_msg = await client.send_rich_message(
-            chat_id=chat_id,
-            rich_message=types.InputRichMessage(blocks=exp_blocks)
-        )
+        exp_msg = await send_jumble_rich(client, chat_id, expire_caption)
         if s.get("auto_delete") and exp_msg:
             asyncio.create_task(delete_after(exp_msg, 4))
     except Exception:
@@ -196,11 +168,11 @@ async def expire_game(client: Client, chat_id: int, puzzle_id: int, expires: flo
 
 
 # ============================================================
-# /jumble COMMAND (AUTO-ON, EASY MODE, 30 SECONDS TIMER)
+# /jumble COMMAND
 # ============================================================
 
 @Client.on_message(filters.command(["jumble", "startgame"], prefixes=["/", "!", "."]))
-async def start_jumble_cmd(client: Client, message: Message):
+async def start_game_cmd(client: Client, message: Message):
     if message.chat.type == enums.ChatType.PRIVATE:
         return await message.reply_text(
             "ℹ️ <code>/jumble</code> group ke liye hota hai! Bot ko kisi group me add karein aur wahan type karein.",
@@ -216,7 +188,6 @@ async def start_jumble_cmd(client: Client, message: Message):
     if chat_id in ACTIVE_FIGHTS:
         return await message.reply_text("⚔️ Group me 1v1 Battle chal rahi hai! Current battle khatam hone dein.")
 
-    # Auto-on in DB: is_active=1, default_diff='easy', easy=30 seconds
     try:
         DB.execute("""
             INSERT INTO settings (chat_id, is_active, default_diff, easy)
@@ -230,7 +201,6 @@ async def start_jumble_cmd(client: Client, message: Message):
     except Exception as e:
         print(f"[Settings Update Error]: {e}")
 
-    # Check if a game is already active
     active = DB.execute("SELECT * FROM games WHERE chat_id=? AND solved=0", (chat_id,)).fetchone()
     if active and time.time() < active["expires"]:
         return await message.reply_text("⚠️ Puzzle already chal raha hai! Check pinned message.")
@@ -247,11 +217,11 @@ async def start_jumble_cmd(client: Client, message: Message):
 
 
 # ============================================================
-# /puzzle & /current COMMAND HANDLER (Time Check Only)
+# /puzzle & /current COMMAND HANDLER
 # ============================================================
 
 @Client.on_message(filters.command(["puzzle", "current", "timer"], prefixes=["/", "!", "."]))
-async def current_puzzle_status_cmd(client: Client, message: Message):
+async def puzzle_cmd(client: Client, message: Message):
     if message.chat.type == enums.ChatType.PRIVATE:
         return await message.reply_text(
             "ℹ️ <code>/puzzle</code> group ke active puzzle status ke liye hota hai.",
@@ -278,6 +248,68 @@ async def current_puzzle_status_cmd(client: Client, message: Message):
         f"💡 Check pinned message for puzzle image!</blockquote>",
         parse_mode=enums.ParseMode.HTML
     )
+
+
+# ============================================================
+# /skip COMMAND
+# ============================================================
+
+@Client.on_message(filters.command(["skip", "next"], prefixes=["/", "!", "."]))
+async def skip_cmd(client: Client, message: Message):
+    chat_id = message.chat.id
+    user_id = message.from_user.id if message.from_user else 0
+
+    if not await check_admin_safe(message.chat, user_id):
+        return await message.reply_text("❌ Sirf Group Admins hi puzzle skip kar sakte hain.")
+
+    game = DB.execute("SELECT * FROM games WHERE chat_id=? AND solved=0", (chat_id,)).fetchone()
+    if not game:
+        return await message.reply_text("❌ Koi active puzzle nahi hai skip karne ke liye.")
+
+    DB.execute("UPDATE games SET solved=1 WHERE chat_id=?", (chat_id,))
+    DB.commit()
+
+    raw_s = get_settings(chat_id)
+    s = dict(raw_s) if raw_s else {}
+    if s.get("auto_delete") and game["message_id"]:
+        await safe_delete_and_unpin(client, chat_id, game["message_id"])
+
+    skip_caption = (
+        f"<blockquote>⏭️ <u><b>PUZZLE SKIPPED BY ADMIN!</b></u></blockquote>\n\n"
+        f"<blockquote>✅ <b>Word was :</b> <code>{game['word'].upper()}</code>\n"
+        f"🔄 <i>Next puzzle starting in 1 second...</i></blockquote>"
+    )
+    msg = await send_jumble_rich(client, chat_id, skip_caption)
+    if s.get("auto_delete") and msg:
+        asyncio.create_task(delete_after(msg, 4))
+
+    await asyncio.sleep(1)
+    if chat_id not in ACTIVE_FIGHTS and s.get("is_active", 1):
+        next_diff = s.get("default_diff") or "easy"
+        asyncio.create_task(start_game(client, chat_id, next_diff, chat_id))
+
+
+# ============================================================
+# /end & /stop COMMAND
+# ============================================================
+
+@Client.on_message(filters.command(["end", "stop", "stopgame"], prefixes=["/", "!", "."]))
+async def end_game_cmd(client: Client, message: Message):
+    chat_id = message.chat.id
+    user_id = message.from_user.id if message.from_user else 0
+
+    if not await check_admin_safe(message.chat, user_id):
+        return await message.reply_text("❌ Sirf Group Admins hi game end kar sakte hain.")
+
+    DB.execute("UPDATE settings SET is_active=0 WHERE chat_id=?", (chat_id,))
+    game = DB.execute("SELECT message_id FROM games WHERE chat_id=? AND solved=0", (chat_id,)).fetchone()
+    DB.execute("UPDATE games SET solved=1 WHERE chat_id=?", (chat_id,))
+    DB.commit()
+
+    if game and game["message_id"]:
+        await safe_delete_and_unpin(client, chat_id, game["message_id"])
+
+    await message.reply_text("<blockquote>🛑 <b>Jumble Game has been stopped by admin.</b></blockquote>", parse_mode=enums.ParseMode.HTML)
 
 
 # ============================================================
@@ -356,11 +388,7 @@ async def puzzle_buttons_listener(client: Client, query: CallbackQuery):
             f"<blockquote>✅ <b>Word was :</b> <code>{game['word'].upper()}</code>\n"
             f"🔄 <i>Next puzzle starting in 1 second...</i></blockquote>"
         )
-        exp_blocks = html_to_rich_blocks(skip_caption)
-        msg = await client.send_rich_message(
-            chat_id=chat_id,
-            rich_message=types.InputRichMessage(blocks=exp_blocks)
-        )
+        msg = await send_jumble_rich(client, chat_id, skip_caption)
         if s.get("auto_delete") and msg:
             asyncio.create_task(delete_after(msg, 4))
 
