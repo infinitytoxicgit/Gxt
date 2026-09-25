@@ -99,6 +99,17 @@ def build_shop_card(user_id: int, user_obj):
     return caption, buttons
 
 
+async def update_shop_rich_view(client: Client, chat_id: int, message_id: int, caption: str, buttons: list):
+    try:
+        await edit_jumble_rich(client, chat_id, message_id, caption, buttons)
+    except Exception:
+        try:
+            await client.delete_messages(chat_id, message_id)
+        except Exception:
+            pass
+        await send_jumble_rich(client, chat_id, caption, buttons)
+
+
 # /shop Command (Works in Groups & DMs)
 @Client.on_message(filters.command(["shop", "powershop", "store"], prefixes=["/", "!", "."]))
 async def open_shop_cmd(client: Client, message: Message):
@@ -117,7 +128,7 @@ async def shop_callback_handler(client: Client, query: CallbackQuery):
         ensure_user(query.from_user)
         caption, buttons = build_shop_card(user_id, query.from_user)
         await query.answer()
-        return await edit_jumble_rich(client, query.message.chat.id, query.message.id, caption, buttons)
+        return await update_shop_rich_view(client, query.message.chat.id, query.message.id, caption, buttons)
 
     elif action == "buy_power":
         power_type = data[1]
@@ -145,9 +156,9 @@ async def shop_callback_handler(client: Client, query: CallbackQuery):
         """, (user_id, power_type, new_expires))
         DB.commit()
 
-        await query.answer(f"✅ Booster Activated! Added {duration // 60}m.", show_alert=True)
+        await query.answer(f"✅ Booster Activated! Added {duration // 60}m.", show_alert=True)[span_5](start_span)[span_5](end_span)
         caption, buttons = build_shop_card(user_id, query.from_user)
-        return await edit_jumble_rich(client, query.message.chat.id, query.message.id, caption, buttons)
+        return await update_shop_rich_view(client, query.message.chat.id, query.message.id, caption, buttons)
 
     elif action == "shop_close":
         await query.message.delete()
