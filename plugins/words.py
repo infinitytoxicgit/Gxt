@@ -11,6 +11,17 @@ WORDS_PER_PAGE = 15
 VALID_DIFFS = ("easy", "medium", "hard")
 
 
+async def can_manage_words(message: Message) -> bool:
+    user_id = message.from_user.id if message.from_user else 0
+    if not user_id:
+        return False
+    if is_owner(user_id) or is_authed(user_id):
+        return True
+    if message.chat and message.chat.type in (enums.ChatType.GROUP, enums.ChatType.SUPERGROUP):
+        return await is_admin_or_owner(message.chat, user_id)
+    return False
+
+
 def get_words_for_diff(difficulty: str):
     difficulty = difficulty.lower()
     builtin = WORDS.get(difficulty, [])
@@ -32,7 +43,6 @@ def build_words_page(difficulty: str, page: int = 1):
 
     lines = []
     for i, w in enumerate(page_words, start=start_idx + 1):
-        # <code> tag par Telegram me tap karte hi word instant copy ho jata hai
         lines.append(f"<b>{i:02d}.</b> <code>{w.upper()}</code>")
 
     words_body = "\n".join(lines) if lines else "<i>No words found.</i>"
@@ -40,7 +50,7 @@ def build_words_page(difficulty: str, page: int = 1):
     caption = (
         f"<blockquote>📚 <u><b>{difficulty.upper()} WORDS BANK (Page {page}/{total_pages})</b></u>\n\n"
         f"Total Words in Database : <b>{total_words}</b>\n"
-        f"💡 <i>Tap any word code block to copy instantly!</i></blockquote>\n\n"
+        f"💡 <i>Tap any word to copy instantly!</i></blockquote>\n\n"
         f"<blockquote>{words_body}</blockquote>\n\n"
         "<blockquote>➕ <b>Bulk Add :</b> <code>/addword [mode] word1 word2 word3</code>\n"
         "➖ <b>Bulk Del :</b> <code>/delword [mode] word1 word2 word3</code></blockquote>"
@@ -70,12 +80,12 @@ def build_words_page(difficulty: str, page: int = 1):
 
 
 # ============================================================
-# WORDS BANK PANEL VIEWER
+# WORDS BANK PANEL VIEWER (/wordbank, /wordsbank)
 # ============================================================
 
 @Client.on_message(filters.command(["wordbank", "wordsbank", "jumblewords"]), group=0)
 async def words_panel_cmd(client: Client, message: Message):
-    if not (is_owner(message.from_user.id) or is_authed(message.from_user.id) or await is_admin_or_owner(message.chat, message.from_user.id)):
+    if not await can_manage_words(message):
         return await message.reply_text("❌ Only Owner/Admin can view word database.")
 
     caption, buttons = build_words_page("easy", 1)
@@ -103,8 +113,8 @@ async def words_pagination_callback(client: Client, query: CallbackQuery):
 
 @Client.on_message(filters.command(["addword", "addwords"]), group=0)
 async def bulk_add_words_cmd(client: Client, message: Message):
-    if not (is_owner(message.from_user.id) or is_authed(message.from_user.id) or await is_admin_or_owner(message.chat, message.from_user.id)):
-        return await message.reply_text("❌ Sirf Admin/Owner hi words add kar sakte hain.")
+    if not await can_manage_words(message):
+        return await message.reply_text("❌ Sirf Owner ya Group Admin hi words add kar sakte hain.")
 
     args = message.text.split()[1:]
     if len(args) < 2:
@@ -119,9 +129,8 @@ async def bulk_add_words_cmd(client: Client, message: Message):
 
     diff = args[0].lower()
     if diff not in VALID_DIFFS:
-        return await message.reply_text(f"❌ Invalid difficulty! Choose from: <code>{', '.join(VALID_DIFFS)}</code>")
+        return await message.reply_text(f"❌ Invalid difficulty! Choose from: <code>{', '.join(VALID_DIFFS)}</code>", parse_mode=enums.ParseMode.HTML)
 
-    # Extract all words separated by space, comma or newline
     raw_words_text = " ".join(args[1:])
     candidates = re.findall(r"[a-zA-Z]+", raw_words_text)
 
@@ -154,7 +163,7 @@ async def bulk_add_words_cmd(client: Client, message: Message):
     DB.commit()
 
     copyable_added = " ".join([f"<code>{w}</code>" for w in added]) if added else "<i>None</i>"
-    
+
     reply_msg = (
         f"<blockquote>✅ <b>BULK ADD SUMMARY ({diff.upper()})</b>\n\n"
         f"🟢 <b>Added ({len(added)}) :</b> {copyable_added}\n"
@@ -170,8 +179,8 @@ async def bulk_add_words_cmd(client: Client, message: Message):
 
 @Client.on_message(filters.command(["delword", "delwords"]), group=0)
 async def bulk_del_words_cmd(client: Client, message: Message):
-    if not (is_owner(message.from_user.id) or is_authed(message.from_user.id) or await is_admin_or_owner(message.chat, message.from_user.id)):
-        return await message.reply_text("❌ Sirf Admin/Owner hi words delete kar sakte hain.")
+    if not await can_manage_words(message):
+        return await message.reply_text("❌ Sirf Owner ya Group Admin hi words delete kar sakte hain.")
 
     args = message.text.split()[1:]
     if len(args) < 2:
@@ -185,7 +194,7 @@ async def bulk_del_words_cmd(client: Client, message: Message):
 
     diff = args[0].lower()
     if diff not in VALID_DIFFS:
-        return await message.reply_text(f"❌ Invalid difficulty! Choose from: <code>{', '.join(VALID_DIFFS)}</code>")
+        return await message.reply_text(f"❌ Invalid difficulty! Choose from: <code>{', '.join(VALID_DIFFS)}</code>", parse_mode=enums.ParseMode.HTML)
 
     raw_words_text = " ".join(args[1:])
     candidates = re.findall(r"[a-zA-Z]+", raw_words_text)
@@ -212,6 +221,6 @@ async def bulk_del_words_cmd(client: Client, message: Message):
         f"<blockquote>🗑️ <b>BULK DELETE SUMMARY ({diff.upper()})</b>\n\n"
         f"🔴 <b>Deleted ({len(deleted)}) :</b> {copyable_del}\n"
         f"⚪ <b>Not Found in Custom DB ({len(not_found)})</b>\n\n"
-        f"💡 <i>(Built-in code bank words cannot be deleted via DB)</i></blockquote>"
+        f"💡 <i>(Built-in bank words cannot be deleted via DB)</i></blockquote>"
     )
     await message.reply_text(reply_msg, parse_mode=enums.ParseMode.HTML)
