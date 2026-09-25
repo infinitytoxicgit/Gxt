@@ -14,14 +14,6 @@ from pyrogram import Client, filters, enums, types
 from pyrogram.types import Message
 from utils.rich import send_jumble_rich
 
-ALL_BOT_COMMANDS = {
-    "start", "help", "jumble", "jumblefight", "fight", "jumblebetfight", "betfight",
-    "settings", "setting", "setpoints", "sethint", "setdaily", "setbonus", "daily", "bonus",
-    "private", "public", "addword", "addwords", "delword", "delallword", "word", "words",
-    "auth", "unauth", "authlist", "update", "gitpull", "stats", "score", "leaderboard", "lb",
-    "backup", "log", "calculate", "shop", "store", "exp", "rank"
-}
-
 
 @Client.on_message(filters.text & filters.group, group=1)
 async def group_answer_handler(client: Client, message: Message):
@@ -29,10 +21,10 @@ async def group_answer_handler(client: Client, message: Message):
         return
 
     txt = message.text.strip()
+    
+    # Koi bhi command ho toh answer listener turant skip karega
     if txt.startswith(("/", "!", ".")):
-        cmd = txt[1:].split()[0].split("@")[0].lower()
-        if cmd in ALL_BOT_COMMANDS:
-            return
+        return
 
     chat_id = message.chat.id
     user_id = message.from_user.id
@@ -59,7 +51,6 @@ async def group_answer_handler(client: Client, message: Message):
         u = get_user(user_id)
         u_dict = dict(u) if u else {}
 
-        # Fix: Convert sqlite3.Row safely to dict
         raw_settings = get_settings(chat_id)
         settings = dict(raw_settings) if raw_settings else {}
 
@@ -137,13 +128,11 @@ async def group_answer_handler(client: Client, message: Message):
             except Exception:
                 pass
 
-        # Channel log error catch
         try:
             asyncio.create_task(send_log_event(client, message.from_user, message.chat, game["word"], txt, pts_reward, diff))
         except Exception:
             pass
 
-        # Old Puzzle delete if auto_delete enabled
         if settings.get("auto_delete") and game["message_id"]:
             await safe_delete_and_unpin(client, chat_id, game["message_id"])
 
