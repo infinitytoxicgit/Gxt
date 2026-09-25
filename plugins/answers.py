@@ -14,8 +14,7 @@ from pyrogram import Client, filters, enums, types
 from pyrogram.types import Message
 from utils.rich import send_jumble_rich
 
-
-# GROUP=100 RAKHO TAUB KABHI BHI COMMANDS KO BLOCK NA KARE
+# GROUP=100 RAKHO TAUB COMMANDS (GROUP 0) PEHLE EXECUTE HO SAKEIN
 @Client.on_message(filters.text & filters.group, group=100)
 async def group_answer_handler(client: Client, message: Message):
     if not message.from_user or not message.text:
@@ -24,7 +23,7 @@ async def group_answer_handler(client: Client, message: Message):
 
     txt = message.text.strip()
 
-    # COMMAND AAYE TOH AAGE PASS KARO!
+    # AGAR COMMAND HAI TOH PROPAGATE KARKE NIKLO
     if txt.startswith(("/", "!", ".")):
         message.continue_propagation()
         return
@@ -63,11 +62,9 @@ async def group_answer_handler(client: Client, message: Message):
 
         diff = str(game["difficulty"]).lower()
 
-        # 1. Base Rewards
         base_pts = int(get_global_config(f"points_{diff}", 10))
         base_exp = int(get_global_config(f"exp_{diff}", 15))
 
-        # 2. Check Boosters
         has_p_boost = False
         has_e_boost = False
         try:
@@ -126,14 +123,7 @@ async def group_answer_handler(client: Client, message: Message):
             )
             DB.commit()
         except Exception:
-            try:
-                DB.execute(
-                    "INSERT INTO score_history (user_id, chat_id, points, timestamp) VALUES (?, ?, ?, ?)",
-                    (user_id, chat_id, pts_reward, now)
-                )
-                DB.commit()
-            except Exception:
-                pass
+            pass
 
         try:
             asyncio.create_task(send_log_event(client, message.from_user, message.chat, game["word"], txt, pts_reward, diff))
@@ -184,7 +174,6 @@ async def group_answer_handler(client: Client, message: Message):
         except Exception as se:
             print(f"[Win Card Error]: {se}")
 
-        # Spawn Next Puzzle
         await asyncio.sleep(2)
         try:
             if chat_id not in ACTIVE_FIGHTS and settings.get("is_active", 1):
