@@ -5,10 +5,30 @@ from database import DB, ensure_user, get_user, get_global_config
 from helpers import get_mention
 from utils.rich import send_jumble_rich, edit_jumble_rich
 
+# Ensure user_powers table exists
+try:
+    DB.execute("""
+        CREATE TABLE IF NOT EXISTS user_powers (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL,
+            power_type TEXT NOT NULL,
+            expires_at REAL NOT NULL,
+            UNIQUE(user_id, power_type)
+        )
+    """)
+    DB.commit()
+except Exception as e:
+    print(f"[User Powers Init Error]: {e}")
+
+
 def get_active_powers(user_id: int):
     now = time.time()
-    rows = DB.execute("SELECT power_type, expires_at FROM user_powers WHERE user_id=? AND expires_at > ?", (user_id, now)).fetchall()
-    return {r["power_type"]: r["expires_at"] for r in rows}
+    try:
+        rows = DB.execute("SELECT power_type, expires_at FROM user_powers WHERE user_id=? AND expires_at > ?", (user_id, now)).fetchall()
+        return {r["power_type"]: r["expires_at"] for r in rows}
+    except Exception:
+        return {}
+
 
 def format_power_bar(remaining_secs: float, total_duration: float = 3600):
     if remaining_secs <= 0:
@@ -19,6 +39,7 @@ def format_power_bar(remaining_secs: float, total_duration: float = 3600):
     mins = int(remaining_secs // 60)
     color_bar = "🟩" * filled + "⬜" * empty if ratio > 0.25 else "🟥" * filled + "⬜" * empty
     return f"{color_bar} ({mins}m left)"
+
 
 def build_shop_card(user_id: int, user_obj):
     u = get_user(user_id)
@@ -79,7 +100,7 @@ def build_shop_card(user_id: int, user_obj):
 
 
 # /shop Command (Works in Groups & DMs)
-@Client.on_message(filters.command(["shop", "powershop"]))
+@Client.on_message(filters.command(["shop", "powershop", "store"], prefixes=["/", "!", "."]))
 async def open_shop_cmd(client: Client, message: Message):
     ensure_user(message.from_user)
     caption, buttons = build_shop_card(message.from_user.id, message.from_user)
