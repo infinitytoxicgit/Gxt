@@ -15,15 +15,16 @@ from pyrogram.types import Message
 from utils.rich import send_jumble_rich
 
 
-@Client.on_message(filters.text & filters.group, group=1)
+@Client.on_message(filters.text & filters.group, group=10)
 async def group_answer_handler(client: Client, message: Message):
     if not message.from_user or not message.text:
         return
 
     txt = message.text.strip()
-    
-    # Koi bhi command ho toh answer listener turant skip karega
+
+    # Skip any commands instantly so command handlers process them freely
     if txt.startswith(("/", "!", ".")):
+        message.continue_propagation()
         return
 
     chat_id = message.chat.id
@@ -181,7 +182,7 @@ async def group_answer_handler(client: Client, message: Message):
         await asyncio.sleep(2)
         try:
             if chat_id not in ACTIVE_FIGHTS and settings.get("is_active", 1):
-                next_diff = settings.get("default_diff") or "medium"
+                next_diff = settings.get("default_diff") or "easy"
                 asyncio.create_task(start_game(client, chat_id, next_diff, chat_id))
         except Exception as ge:
             print(f"[Spawn Next Error]: {ge}")
