@@ -2,6 +2,7 @@ import math
 import re
 from pyrogram import Client, filters, enums, types
 from pyrogram.types import Message, CallbackQuery
+from config import OWNER_ID
 from database import DB
 from helpers import is_owner, is_authed
 from word_bank import WORDS
@@ -10,7 +11,6 @@ from utils.rich import send_jumble_rich, edit_jumble_rich
 WORDS_PER_PAGE = 15
 VALID_DIFFS = ("easy", "medium", "hard")
 
-# Ensure table exists
 try:
     DB.execute("""
         CREATE TABLE IF NOT EXISTS custom_words (
@@ -25,25 +25,35 @@ except Exception as e:
     print(f"[Custom Words Table Init]: {e}")
 
 
-async def can_manage_words(client: Client, message: Message) -> bool:
+async def can_manage_words(client: Client, message: Message) -> tuple[bool, str]:
     if not message.from_user:
-        return False
+        return False, "❌ User info not found."
+
     user_id = message.from_user.id
 
-    # 1. Owner & Authed Admin (DM + Group dono jagah allowed)
+    # 1. Config OWNER_ID check
+    try:
+        if int(user_id) == int(OWNER_ID):
+            return True, ""
+    except Exception:
+        pass
+
+    # 2. Helper check
     if is_owner(user_id) or is_authed(user_id):
-        return True
+        return True, ""
 
-    # 2. Private DM me normal users ko mana karein
+    # 3. Private DM check
     if message.chat.type == enums.ChatType.PRIVATE:
-        return False
+        return False, "❌ DM me sirf Bot Owner aur Authorized users hi words manage kar sakte hain."
 
-    # 3. Group Admin Check
+    # 4. Group Admin check
     try:
         member = await client.get_chat_member(message.chat.id, user_id)
-        return member.status in (enums.ChatMemberStatus.OWNER, enums.ChatMemberStatus.ADMINISTRATOR)
+        if member.status in (enums.ChatMemberStatus.OWNER, enums.ChatMemberStatus.ADMINISTRATOR):
+            return True, ""
+        return False, "❌ Sirf Group Admins hi words manage kar sakte hain."
     except Exception:
-        return False
+        return False, "❌ Admin rights verify nahi ho sake."
 
 
 def get_words_for_diff(difficulty: str):
@@ -110,10 +120,11 @@ def build_words_page(difficulty: str, page: int = 1):
 # WORDS BANK PANEL VIEWER (/wordbank, /wordsbank)
 # ============================================================
 
-@Client.on_message(filters.command(["wordbank", "wordsbank", "jumblewords"]), group=0)
+@Client.on_message(filters.command(["wordbank", "wordsbank", "jumblewords"], prefixes=["/", "!", "."]))
 async def words_panel_cmd(client: Client, message: Message):
-    if not await can_manage_words(client, message):
-        return await message.reply_text("❌ Only Owner/Admin can view word database.")
+    allowed, err_text = await can_manage_words(client, message)
+    if not allowed:
+        return await message.reply_text(err_text)
 
     caption, buttons = build_words_page("easy", 1)
     await send_jumble_rich(client, message.chat.id, caption, buttons)
@@ -138,10 +149,11 @@ async def words_pagination_callback(client: Client, query: CallbackQuery):
 # BULK ADD WORDS COMMAND (/addword, /addwords)
 # ============================================================
 
-@Client.on_message(filters.command(["addword", "addwords"]), group=0)
+@Client.on_message(filters.command(["addword", "addwords"], prefixes=["/", "!", "."]))
 async def bulk_add_words_cmd(client: Client, message: Message):
-    if not await can_manage_words(client, message):
-        return await message.reply_text("❌ Sirf Owner ya Group Admin hi words add kar sakte hain.")
+    allowed, err_text = await can_manage_words(client, message)
+    if not allowed:
+        return await message.reply_text(err_text)
 
     args = message.text.split()[1:]
     if len(args) < 2:
@@ -207,10 +219,11 @@ async def bulk_add_words_cmd(client: Client, message: Message):
 # BULK DELETE WORDS COMMAND (/delword, /delwords)
 # ============================================================
 
-@Client.on_message(filters.command(["delword", "delwords"]), group=0)
+@Client.on_message(filters.command(["delword", "delwords"], prefixes=["/", "!", "."]))
 async def bulk_del_words_cmd(client: Client, message: Message):
-    if not await can_manage_words(client, message):
-        return await message.reply_text("❌ Sirf Owner ya Group Admin hi words delete kar sakte hain.")
+    allowed, err_text = await can_manage_words(client, message)
+    if not allowed:
+        return await message.reply_text(err_text)
 
     args = message.text.split()[1:]
     if len(args) < 2:
