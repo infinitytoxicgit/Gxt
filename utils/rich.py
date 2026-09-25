@@ -225,7 +225,7 @@ async def send_jumble_rich(client, chat_id: int, caption_html: str, rich_buttons
             elif isinstance(row, list):
                 blocks.append(types.InputRichBlockButtons(buttons=row))
 
-    # ATTEMPT 1: Native Kurigram Rich Message
+    # ATTEMPT 1: Native Kurigram send_rich_message
     try:
         if hasattr(client, "send_rich_message"):
             return await client.send_rich_message(
@@ -235,7 +235,7 @@ async def send_jumble_rich(client, chat_id: int, caption_html: str, rich_buttons
     except Exception as e:
         print(f"[send_jumble_rich Info] Kurigram native rich send failed: {e}")
 
-    # ATTEMPT 2: Standard Message with Rich Message Payload
+    # ATTEMPT 2: Standard Message with rich_message payload
     try:
         return await client.send_message(
             chat_id=chat_id,
@@ -245,7 +245,7 @@ async def send_jumble_rich(client, chat_id: int, caption_html: str, rich_buttons
     except Exception as fe:
         print(f"[send_jumble_rich Info] Rich blocks fallback failed: {fe}")
 
-    # ATTEMPT 3: Ironclad Guarantee (Standard HTML Message with Inline Buttons)
+    # ATTEMPT 3: Standard Pyrogram fallback if Kurigram is not active
     inline_markup = _convert_to_standard_inline(rich_buttons_rows)
     if photo_file and os.path.isfile(photo_file):
         try:
@@ -277,7 +277,7 @@ async def edit_jumble_rich(client, chat_id: int, message_id: int, caption_html: 
             elif isinstance(row, list):
                 blocks.append(types.InputRichBlockButtons(buttons=row))
 
-    # ATTEMPT 1: Kurigram edit_rich_message
+    # ATTEMPT 1: Native Kurigram in-place rich edit
     try:
         if hasattr(client, "edit_rich_message"):
             return await client.edit_rich_message(
@@ -299,22 +299,10 @@ async def edit_jumble_rich(client, chat_id: int, message_id: int, caption_html: 
     except Exception:
         pass
 
-    # ATTEMPT 3: Standard Pyrogram edit_message_text with converted inline markup
-    try:
-        inline_markup = _convert_to_standard_inline(rich_buttons_rows)
-        return await client.edit_message_text(
-            chat_id=chat_id,
-            message_id=message_id,
-            text=caption_html,
-            reply_markup=inline_markup,
-            parse_mode=enums.ParseMode.HTML
-        )
-    except Exception:
-        pass
-
-    # ATTEMPT 4: Delete & Send Fresh
+    # ATTEMPT 3: Never convert to standard inline! Purana message delete karke fresh Rich send karo
     try:
         await client.delete_messages(chat_id, message_id)
     except Exception:
         pass
+
     return await send_jumble_rich(client, chat_id, caption_html, rich_buttons_rows, slider_row)
