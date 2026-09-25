@@ -1,5 +1,6 @@
 import asyncio
 import os
+import sys
 import time
 import importlib
 import glob
@@ -75,6 +76,23 @@ async def direct_master_router(client, message):
     first_token = raw.split()[0]
     cmd = "/" + first_token[1:].lower().split("@")[0]
 
+    # UI MODE SWITCH COMMANDS
+    if cmd in ("/rich", "/setrich"):
+        try:
+            from utils.rich import set_ui_mode
+            set_ui_mode("rich")
+            return await message.reply_text("<blockquote>✨ <b>UI Mode: RICH BLOCKS ACTIVATED</b>\nSabhi panels native Rich view me aayenge!</blockquote>", parse_mode=enums.ParseMode.HTML)
+        except Exception as e:
+            return await message.reply_text(f"❌ Error setting rich mode: {e}")
+
+    if cmd in ("/inline", "/setinline"):
+        try:
+            from utils.rich import set_ui_mode
+            set_ui_mode("inline")
+            return await message.reply_text("<blockquote>🔘 <b>UI Mode: STANDARD INLINE ACTIVATED</b>\nSabhi panels standard buttons me convert ho gaye!</blockquote>", parse_mode=enums.ParseMode.HTML)
+        except Exception as e:
+            return await message.reply_text(f"❌ Error setting inline mode: {e}")
+
     # 1. CORE JUMBLE GAME COMMANDS
     if cmd in ("/jumble", "/startgame", "/play"):
         try:
@@ -82,6 +100,7 @@ async def direct_master_router(client, message):
             await start_game_cmd(client, message)
         except Exception as e:
             print(f"🔥 Error in {cmd}: {e}")
+            traceback.print_exc()
         return
 
     if cmd in ("/puzzle", "/current", "/puz"):
@@ -108,13 +127,14 @@ async def direct_master_router(client, message):
             print(f"🔥 Error in {cmd}: {e}")
         return
 
-    # 2. POWER SHOP COMMANDS (Executed ONCE Only)
+    # 2. POWER SHOP COMMANDS
     if cmd in ("/shop", "/powershop", "/store", "/power"):
         try:
             from plugins.shop import open_shop_cmd
             await open_shop_cmd(client, message)
         except Exception as e:
             print(f"🔥 Error in {cmd}: {e}")
+            traceback.print_exc()
         return
 
     # 3. WORDS BANK COMMANDS
@@ -153,7 +173,7 @@ async def direct_master_router(client, message):
         return
 
     # 5. USER PROFILE & STATS
-    if cmd in ("/stats", "/mystats", "/profile", "/me"):
+    if cmd in ("/stats", "/mystats", "/profile", "/me", "/score"):
         try:
             from plugins.basic import stats_cmd
             await stats_cmd(client, message)
@@ -169,6 +189,7 @@ async def direct_master_router(client, message):
             await settings_cmd(client, message)
         except Exception as e:
             print(f"🔥 Error in {cmd}: {e}")
+            traceback.print_exc()
         return
 
     # 7. DAILY REWARD & GROUP BONUS
@@ -232,7 +253,7 @@ async def direct_master_router(client, message):
             if update_fn:
                 await update_fn(client, message)
             else:
-                msg = await message.reply_text("🔄 <b>Restarting bot instance...</b>", parse_mode=enums.ParseMode.HTML)
+                await message.reply_text("🔄 <b>Restarting bot instance...</b>", parse_mode=enums.ParseMode.HTML)
                 os.system("git pull")
                 os.execv(sys.executable, [sys.executable] + sys.argv)
         except Exception as e:
@@ -269,6 +290,9 @@ async def direct_master_router(client, message):
             print(f"🔥 Error in {cmd}: {e}")
         return
 
+    # Agar koi command router me na ho toh fallback handlers par jaye
+    message.continue_propagation()
+
 
 async def register_plugins():
     print("📦 Explicitly Registering All Callback Handlers...")
@@ -281,7 +305,6 @@ async def register_plugins():
             mod = importlib.import_module(mod_name)
             for attr_name in dir(mod):
                 attr = getattr(mod, attr_name)
-                # Register ALL CallbackQueryHandler safely
                 if hasattr(attr, "handlers") and isinstance(getattr(attr, "handlers"), list):
                     for handler, group in getattr(attr, "handlers"):
                         if isinstance(handler, CallbackQueryHandler):
