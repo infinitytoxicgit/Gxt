@@ -14,7 +14,7 @@ app = Client(
     bot_token=BOT_TOKEN
 )
 
-# Debug listener ko main() ke bahar global scope me rakhein
+# Debug listener incoming traffic track karne ke liye
 @app.on_message(group=-100)
 async def debug_all_incoming(client, message):
     if message.text:
@@ -37,7 +37,9 @@ def register_plugins():
                 attr = getattr(mod, attr_name)
                 if hasattr(attr, "handlers") and isinstance(getattr(attr, "handlers"), list):
                     for handler, group in getattr(attr, "handlers"):
-                        app.add_handler(handler, group)
+                        # Answers handler ko hamesha group=100 assign karein taaki commands swallow na hon
+                        assigned_group = 100 if "answers" in mod_name else group
+                        app.add_handler(handler, assigned_group)
                         file_handlers += 1
                         total_handlers += 1
             print(f"  ✅ {mod_name:<25} -> {file_handlers} handlers bound")
