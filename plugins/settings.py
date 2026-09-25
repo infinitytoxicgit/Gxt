@@ -141,6 +141,18 @@ def build_timers_card(chat_id: int):
     return caption, buttons
 
 
+async def update_settings_rich_view(client: Client, chat_id: int, message_id: int, caption: str, buttons: list):
+    """Guarantees Rich layout by cleanly replacing the message if inline fallback is threatened."""
+    try:
+        await edit_jumble_rich(client, chat_id, message_id, caption, buttons)
+    except Exception:
+        try:
+            await client.delete_messages(chat_id, message_id)
+        except Exception:
+            pass
+        await send_jumble_rich(client, chat_id, caption, buttons)
+
+
 @Client.on_message(filters.command(["settings", "setting", "jumblesettings"], prefixes=["/", "!", "."]) & filters.group, group=-1)
 async def settings_cmd(client: Client, message: Message):
     if not message.from_user:
@@ -196,7 +208,6 @@ async def settings_callback_router(client: Client, query: CallbackQuery):
         DB.commit()
         await query.answer(f"Mode set to: {diff.upper()}! Starting new puzzle...")
 
-        # Purane active puzzle ko clear karke turant naye mode ka word start karo
         from plugins.game_core import start_game
         s = dict(get_settings(chat_id))
         if s.get("is_active", 1):
@@ -205,7 +216,7 @@ async def settings_callback_router(client: Client, query: CallbackQuery):
     elif action == "set_menu_timers":
         caption, buttons = build_timers_card(chat_id)
         await query.answer()
-        return await edit_jumble_rich(client, chat_id, query.message.id, caption, buttons)
+        return await update_settings_rich_view(client, chat_id, query.message.id, caption, buttons)
 
     elif action == "set_timer_val":
         diff = data[1]
@@ -214,7 +225,7 @@ async def settings_callback_router(client: Client, query: CallbackQuery):
         DB.commit()
         await query.answer(f"{diff.upper()} Timer: {secs}s!")
         caption, buttons = build_timers_card(chat_id)
-        return await edit_jumble_rich(client, chat_id, query.message.id, caption, buttons)
+        return await update_settings_rich_view(client, chat_id, query.message.id, caption, buttons)
 
     elif action == "set_back_main":
         await query.answer()
@@ -224,4 +235,4 @@ async def settings_callback_router(client: Client, query: CallbackQuery):
         return await query.answer("Closed!")
 
     caption, buttons = build_settings_card(chat_id, query.message.chat.title or "Group")
-    await edit_jumble_rich(client, chat_id, query.message.id, caption, buttons)
+    await update_settings_rich_view(client, chat_id, query.message.id, caption, buttons)
