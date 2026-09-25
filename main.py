@@ -47,6 +47,7 @@ async def resume_all_active_games():
             if c_id in ACTIVE_FIGHTS:
                 continue
             try:
+                # Active puzzle clear karke clean fresh start
                 DB.execute("DELETE FROM games WHERE chat_id=?", (c_id,))
                 DB.commit()
                 await start_game(app, c_id, diff, c_id)
@@ -76,12 +77,18 @@ async def direct_master_router(client, message):
     first_token = raw.split()[0]
     cmd = "/" + first_token[1:].lower().split("@")[0]
 
-    # UI MODE SWITCH COMMANDS
+    # ==============================
+    # DUAL MODE TOGGLES (/rich, /inline)
+    # ==============================
     if cmd in ("/rich", "/setrich"):
         try:
             from utils.rich import set_ui_mode
             set_ui_mode("rich")
-            return await message.reply_text("<blockquote>✨ <b>UI Mode: RICH BLOCKS ACTIVATED</b>\nSabhi panels native Rich view me aayenge!</blockquote>", parse_mode=enums.ParseMode.HTML)
+            return await message.reply_text(
+                "<blockquote>✨ <b>UI MODE UPDATED: RICH BLOCKS ACTIVATED</b>\n\n"
+                "• Saare Game Puzzles, Leaderboards, Stats, Shop aur Settings ab native <b>Rich UI Blocks</b> me aayenge!</blockquote>",
+                parse_mode=enums.ParseMode.HTML
+            )
         except Exception as e:
             return await message.reply_text(f"❌ Error setting rich mode: {e}")
 
@@ -89,7 +96,11 @@ async def direct_master_router(client, message):
         try:
             from utils.rich import set_ui_mode
             set_ui_mode("inline")
-            return await message.reply_text("<blockquote>🔘 <b>UI Mode: STANDARD INLINE ACTIVATED</b>\nSabhi panels standard buttons me convert ho gaye!</blockquote>", parse_mode=enums.ParseMode.HTML)
+            return await message.reply_text(
+                "<blockquote>🔘 <b>UI MODE UPDATED: STANDARD INLINE ACTIVATED</b>\n\n"
+                "• Saare Game Puzzles, Leaderboards, Stats, Shop aur Settings ab standard <b>Inline Buttons</b> me aayenge!</blockquote>",
+                parse_mode=enums.ParseMode.HTML
+            )
         except Exception as e:
             return await message.reply_text(f"❌ Error setting inline mode: {e}")
 
@@ -100,7 +111,6 @@ async def direct_master_router(client, message):
             await start_game_cmd(client, message)
         except Exception as e:
             print(f"🔥 Error in {cmd}: {e}")
-            traceback.print_exc()
         return
 
     if cmd in ("/puzzle", "/current", "/puz"):
@@ -134,7 +144,6 @@ async def direct_master_router(client, message):
             await open_shop_cmd(client, message)
         except Exception as e:
             print(f"🔥 Error in {cmd}: {e}")
-            traceback.print_exc()
         return
 
     # 3. WORDS BANK COMMANDS
@@ -189,7 +198,6 @@ async def direct_master_router(client, message):
             await settings_cmd(client, message)
         except Exception as e:
             print(f"🔥 Error in {cmd}: {e}")
-            traceback.print_exc()
         return
 
     # 7. DAILY REWARD & GROUP BONUS
@@ -235,7 +243,7 @@ async def direct_master_router(client, message):
             print(f"🔥 Error in {cmd}: {e}")
         return
 
-    # 10. BASIC & CALCULATOR
+    # 10. BASIC & CALCULATOR ENGINE
     if cmd in ("/calculate", "/calc", "/math"):
         try:
             from plugins.basic import calculate_cmd
@@ -245,17 +253,14 @@ async def direct_master_router(client, message):
             traceback.print_exc()
         return
 
-    # 11. ADMIN, UPDATE & SYSTEM OPERATIONS
+    # 11. ADMIN, UPDATE & CLEAN REBOOT
     if cmd in ("/update", "/pull", "/restart", "/reboot"):
         try:
-            from plugins import admin
-            update_fn = getattr(admin, "update_bot_cmd", getattr(admin, "update_cmd", getattr(admin, "restart_cmd", None)))
-            if update_fn:
-                await update_fn(client, message)
-            else:
-                await message.reply_text("🔄 <b>Restarting bot instance...</b>", parse_mode=enums.ParseMode.HTML)
-                os.system("git pull")
-                os.execv(sys.executable, [sys.executable] + sys.argv)
+            await message.reply_text("🔄 <b>Pulling latest changes and rebooting instance...</b>", parse_mode=enums.ParseMode.HTML)
+            os.system("git pull")
+            time.sleep(1)
+            python_bin = sys.executable
+            os.execl(python_bin, python_bin, *sys.argv)
         except Exception as e:
             print(f"🔥 Error in {cmd}: {e}")
             traceback.print_exc()
@@ -290,9 +295,6 @@ async def direct_master_router(client, message):
             print(f"🔥 Error in {cmd}: {e}")
         return
 
-    # Agar koi command router me na ho toh fallback handlers par jaye
-    message.continue_propagation()
-
 
 async def register_plugins():
     print("📦 Explicitly Registering All Callback Handlers...")
@@ -305,6 +307,7 @@ async def register_plugins():
             mod = importlib.import_module(mod_name)
             for attr_name in dir(mod):
                 attr = getattr(mod, attr_name)
+                # Register ALL CallbackQueryHandler safely
                 if hasattr(attr, "handlers") and isinstance(getattr(attr, "handlers"), list):
                     for handler, group in getattr(attr, "handlers"):
                         if isinstance(handler, CallbackQueryHandler):
