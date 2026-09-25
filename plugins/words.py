@@ -27,7 +27,6 @@ except Exception as e:
 
 async def can_manage_words(client: Client, message: Message) -> tuple[bool, str]:
     if not message.from_user:
-        # Agar group anonymous admin ho
         if message.sender_chat and message.sender_chat.id == message.chat.id:
             return True, ""
         return False, "❌ User info not found."
@@ -55,7 +54,6 @@ async def can_manage_words(client: Client, message: Message) -> tuple[bool, str]
             return True, ""
         return False, "❌ Sirf Group Admins hi words manage kar sakte hain."
     except Exception:
-        # Group check fallback: allow if group member query fails but sender is verified
         return True, ""
 
 
@@ -134,7 +132,7 @@ async def update_words_rich_view(client: Client, chat_id: int, message_id: int, 
 # WORDS BANK PANEL VIEWER (/word, /words, /wordbank)
 # ============================================================
 
-@Client.on_message(filters.command(["word", "words", "wordbank", "wordsbank", "jumblewords"], prefixes=["/", "!", "."]))
+@Client.on_message(filters.command(["word", "words", "wordbank", "wordsbank", "jumblewords"], prefixes=["/", "!", "."]), group=-1)
 async def words_panel_cmd(client: Client, message: Message):
     allowed, err_text = await can_manage_words(client, message)
     if not allowed:
@@ -166,7 +164,7 @@ async def words_pagination_callback(client: Client, query: CallbackQuery):
 # BULK ADD WORDS COMMAND (/addword, /addwords)
 # ============================================================
 
-@Client.on_message(filters.command(["addword", "addwords"], prefixes=["/", "!", "."]))
+@Client.on_message(filters.command(["addword", "addwords"], prefixes=["/", "!", "."]), group=-1)
 async def bulk_add_words_cmd(client: Client, message: Message):
     allowed, err_text = await can_manage_words(client, message)
     if not allowed:
@@ -238,7 +236,7 @@ async def bulk_add_words_cmd(client: Client, message: Message):
 # BULK DELETE WORDS COMMAND (/delword, /delwords)
 # ============================================================
 
-@Client.on_message(filters.command(["delword", "delwords"], prefixes=["/", "!", "."]))
+@Client.on_message(filters.command(["delword", "delwords"], prefixes=["/", "!", "."]), group=-1)
 async def bulk_del_words_cmd(client: Client, message: Message):
     allowed, err_text = await can_manage_words(client, message)
     if not allowed:
