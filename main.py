@@ -57,10 +57,10 @@ async def main():
     await app.start()
     me = await app.get_me()
     print(f"✅ Online as @{me.username} (ID: {me.id})")
-    
+
     asyncio.create_task(resume_all_active_games())
     asyncio.create_task(auto_backup_task())
-    
+
     await idle()
     await app.stop()
 
