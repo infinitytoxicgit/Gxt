@@ -6,7 +6,6 @@ from config import API_ID, API_HASH, BOT_TOKEN, OWNER_ID
 from database import DB
 from pyrogram import Client, idle, enums
 
-# Standard plugins directory loading (No deadlock, no dropped messages)
 app = Client(
     "advanced_jumble_bot",
     api_id=API_ID,
@@ -53,12 +52,8 @@ async def resume_all_active_games():
     except Exception as err:
         print(f"[Resume Query Error]: {err}")
 
-# UI Switch handlers direct
-@app.on_message(pyrogram_filters:=None)  # dummy to avoid syntax errors if imported
-def _dummy(): pass
-
 async def main():
-    print("🚀 Bot starting with native plugins loader...")
+    print("🚀 Bot starting native Rich engine...")
     await app.start()
     me = await app.get_me()
     print(f"✅ Online as @{me.username} (ID: {me.id})")
