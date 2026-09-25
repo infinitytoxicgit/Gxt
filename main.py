@@ -3,17 +3,26 @@ import os
 import time
 import importlib
 import glob
+import traceback
 from config import API_ID, API_HASH, BOT_TOKEN, OWNER_ID
 from database import DB
 from pyrogram import Client, idle, enums
 
-# Disable Pyrogram's buggy auto-plugin loader and load manually with full binding
 app = Client(
     "advanced_jumble_bot",
     api_id=API_ID,
     api_hash=API_HASH,
     bot_token=BOT_TOKEN
 )
+
+def wrap_handler(func):
+    async def wrapper(client, update, *args, **kwargs):
+        try:
+            return await func(client, update, *args, **kwargs)
+        except Exception as e:
+            print(f"\n🔥 CRASH IN [{func.__name__}]: {e}")
+            traceback.print_exc()
+    return wrapper
 
 def load_all_plugins():
     print("📦 Loading and binding all plugins to app...")
@@ -24,13 +33,12 @@ def load_all_plugins():
             continue
         try:
             mod = importlib.import_module(module_name)
-            # Find all Pyrogram handlers declared in the module
             count = 0
             for attr in dir(mod):
                 obj = getattr(mod, attr)
-                # Check if it has pyrogram handler attributes
                 if hasattr(obj, "handlers"):
                     for handler, group in getattr(obj, "handlers"):
+                        handler.callback = wrap_handler(handler.callback)
                         app.add_handler(handler, group)
                         count += 1
             print(f"  ✅ {module_name} linked successfully ({count} handlers bound)")
@@ -78,7 +86,6 @@ async def resume_all_active_games():
     except Exception as err:
         print(f"[Resume Query Error]: {err}")
 
-# Live incoming logger to ensure bot is actually receiving Telegram updates
 @app.on_message(group=-1)
 async def incoming_update_tracker(client, message):
     chat_type = str(message.chat.type).replace("ChatType.", "")
