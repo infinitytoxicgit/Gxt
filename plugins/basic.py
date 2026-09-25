@@ -216,21 +216,21 @@ async def deduct_stars_cmd(client: Client, message: Message):
 # ============================================================
 
 def get_stats_content_and_image(target, user_data):
-    user_dict = dict(user_data)
+    user_dict = dict(user_data) if user_data else {}
     exp_per_lvl = int(get_global_config("exp_per_level", 500))
-    user_exp = user_dict.get("exp", 0)
+    user_exp = int(user_dict.get("exp") or 0)
     current_level = (user_exp // exp_per_lvl) + 1
     rem_exp = user_exp % exp_per_lvl
 
-    total_fights = (user_dict.get("fight_wins") or 0) + (user_dict.get("fight_losses") or 0)
-    winrate = ((user_dict.get("fight_wins", 0) / total_fights) * 100) if total_fights else 0
-    total_bets = (user_dict.get("bet_wins") or 0) + (user_dict.get("bet_losses") or 0)
-    bet_winrate = (((user_dict.get("bet_wins") or 0) / total_bets) * 100) if total_bets else 0
+    total_fights = int(user_dict.get("fight_wins") or 0) + int(user_dict.get("fight_losses") or 0)
+    winrate = ((int(user_dict.get("fight_wins") or 0) / total_fights) * 100) if total_fights else 0
+    total_bets = int(user_dict.get("bet_wins") or 0) + int(user_dict.get("bet_losses") or 0)
+    bet_winrate = ((int(user_dict.get("bet_wins") or 0) / total_bets) * 100) if total_bets else 0
 
     is_priv = bool(user_dict.get("is_private", 0))
     mention = f"<b>{target.first_name}</b>" if is_priv else get_mention(target)
     priv_status = "🔒 Private" if is_priv else "🌐 Public"
-    points_val = user_dict.get("stars", 0) if user_dict.get("stars", 0) > 0 else user_dict.get("points", 0)
+    points_val = int(user_dict.get("stars") or user_dict.get("points") or 0)
 
     now = time.time()
     rows = DB.execute("SELECT power_type, expires_at FROM user_powers WHERE user_id=? AND expires_at > ?", (target.id, now)).fetchall()
@@ -263,15 +263,20 @@ def get_stats_content_and_image(target, user_data):
     slider = make_exp_slider_row(rem_exp, exp_per_lvl)
     buttons = [
         [
-            types.RichMessageButton(text="🛍️ Power Shop", style=enums.ButtonStyle.SUCCESS, callback_data="open_shop_direct"),
-            types.RichMessageButton(text="📊 Top Graph", style=enums.ButtonStyle.PRIMARY, callback_data="lb_view|global|all"),
+            types.RichMessageButton(text="🛍️ Power Shop", style=enums.ButtonStyle.SUCCESS, callback_data=f"buy_shop|menu|{target.id}"),
+            types.RichMessageButton(text="📊 Top Graph", style=enums.ButtonStyle.PRIMARY, callback_data="lb_view|global|all|0"),
         ]
     ]
 
-    easy_c = user_dict.get("easy_solved", 0)
-    med_c = user_dict.get("medium_solved", 0)
-    hard_c = user_dict.get("hard_solved", 0)
-    img_path = make_stats_graph_image(target.first_name, easy_c, med_c, hard_c, current_level, rem_exp, exp_per_lvl)
+    easy_c = int(user_dict.get("easy_solved") or 0)
+    med_c = int(user_dict.get("medium_solved") or 0)
+    hard_c = int(user_dict.get("hard_solved") or 0)
+    
+    img_path = None
+    try:
+        img_path = make_stats_graph_image(target.first_name, easy_c, med_c, hard_c, current_level, rem_exp, exp_per_lvl)
+    except Exception as e:
+        print(f"[make_stats_graph_image Error]: {e}")
 
     return caption_html, buttons, slider, img_path
 
@@ -338,15 +343,15 @@ def build_leaderboard_card(scope: str = "global", period: str = "all", chat_id: 
     lines = []
     top_chart_list = []
     if rows:
-        max_score = rows[0]["score"] if rows[0]["score"] > 0 else 1
+        max_score = int(rows[0]["score"] or 1)
         for idx, r in enumerate(rows, start=1):
-            name = r["name"][:10]
-            top_chart_list.append({"name": name, "score": r["score"]})
+            name = str(r["name"] or "Player")[:10]
+            sc = int(r["score"] or 0)
+            top_chart_list.append({"name": name, "score": sc})
             display_name = name if r["is_private"] else f"<a href='tg://user?id={r['user_id']}'>{name}</a>"
-            score = r["score"]
-            ratio = min(score / max_score, 1.0)
+            ratio = min(sc / max(max_score, 1), 1.0)
             bar = "█" * int(round(ratio * 7)) + "░" * (7 - int(round(ratio * 7)))
-            lines.append(f"#{idx} {display_name:<10} <code>{bar}</code> ⭐<b>{score}</b>")
+            lines.append(f"#{idx} {display_name:<10} <code>{bar}</code> ⭐<b>{sc}</b>")
         board_text = "\n".join(lines)
     else:
         board_text = "<i>No solves recorded in this timeframe yet.</i>"
@@ -383,7 +388,12 @@ def build_leaderboard_card(scope: str = "global", period: str = "all", chat_id: 
         ],
     ]
 
-    graph_img = make_leaderboard_graph_image(title_scope, period_titles.get(period, "All Time"), top_chart_list)
+    graph_img = None
+    try:
+        graph_img = make_leaderboard_graph_image(title_scope, period_titles.get(period, "All Time"), top_chart_list)
+    except Exception as e:
+        print(f"[make_leaderboard_graph_image Error]: {e}")
+
     return caption, buttons, graph_img
 
 
@@ -403,51 +413,67 @@ async def lb_view_callback(client: Client, query: CallbackQuery):
     caption, buttons, graph_img = build_leaderboard_card(scope, period, chat_id)
     await query.answer()
 
-    blocks = []
-    if graph_img and os.path.isfile(graph_img):
-        blocks.append(types.InputRichBlockPhoto(photo=types.InputMediaPhoto(graph_img)))
-    blocks.extend(html_to_rich_blocks(caption))
-    for r in buttons:
-        blocks.append(types.InputRichBlockButtons(buttons=r))
-
+    # Smooth Rich Card Transition: Purana delete karke fresh rich with updated photo drop karein
     try:
-        await client.edit_message_text(
-            chat_id=query.message.chat.id,
-            message_id=query.message.id,
-            text=" ",
-            rich_message=types.InputRichMessage(blocks=blocks)
-        )
+        await query.message.delete()
     except Exception:
-        await edit_jumble_rich(client, query.message.chat.id, query.message.id, caption, buttons)
+        pass
+    await send_jumble_rich(client, query.message.chat.id, caption, buttons, photo=graph_img)
 
 
 @Client.on_callback_query(filters.regex(r"^refresh_leaderboard"))
 async def refresh_lb_callback(client: Client, query: CallbackQuery):
     caption, buttons, graph_img = build_leaderboard_card("global", "all", query.message.chat.id)
     await query.answer()
-
-    blocks = []
-    if graph_img and os.path.isfile(graph_img):
-        blocks.append(types.InputRichBlockPhoto(photo=types.InputMediaPhoto(graph_img)))
-    blocks.extend(html_to_rich_blocks(caption))
-    for r in buttons:
-        blocks.append(types.InputRichBlockButtons(buttons=r))
-
     try:
-        await client.edit_message_text(
-            chat_id=query.message.chat.id,
-            message_id=query.message.id,
-            text=" ",
-            rich_message=types.InputRichMessage(blocks=blocks)
-        )
+        await query.message.delete()
     except Exception:
-        await edit_jumble_rich(client, query.message.chat.id, query.message.id, caption, buttons)
+        pass
+    await send_jumble_rich(client, query.message.chat.id, caption, buttons, photo=graph_img)
 
 
 @Client.on_callback_query(filters.regex(r"^show_my_stats"))
 async def show_my_stats_callback(client: Client, query: CallbackQuery):
     ensure_user(query.from_user)
     u = get_user(query.from_user.id)
-    caption, buttons, slider, _ = get_stats_content_and_image(query.from_user, u)
+    caption, buttons, slider, img_path = get_stats_content_and_image(query.from_user, u)
     await query.answer()
-    await edit_jumble_rich(client, query.message.chat.id, query.message.id, caption, buttons, slider_row=slider)
+    try:
+        await query.message.delete()
+    except Exception:
+        pass
+    await send_jumble_rich(client, query.message.chat.id, caption, buttons, slider_row=slider, photo=img_path)
+
+
+# ============================================================
+# CALCULATOR COMMAND ENGINE (/calculate 25*4, /calc, /math)
+# ============================================================
+
+@Client.on_message(filters.command(["calculate", "calc", "math"], prefixes=VALID_PREFIXES))
+async def calculate_cmd(client: Client, message: Message):
+    if len(message.command) < 2:
+        return await message.reply_text(
+            "<blockquote>🧮 <b>CALCULATOR USAGE</b>\n\n"
+            "Format: <code>/calculate [math expression]</code>\n"
+            "Example: <code>/calculate (25 * 4) + 50</code></blockquote>",
+            parse_mode=enums.ParseMode.HTML
+        )
+
+    raw_expr = message.text.split(None, 1)[1].strip()
+    
+    # Validation
+    allowed_chars = set("0123456789+-*/(). %^")
+    if not all(c in allowed_chars for c in raw_expr):
+        return await message.reply_text("❌ Sirf basic mathematical operations allowed hain!")
+
+    eval_expr = raw_expr.replace("^", "**")
+    try:
+        result = eval(eval_expr, {"__builtins__": None}, {})
+        ans_text = (
+            "<blockquote>🧮 <u><b>CALCULATOR RESULT</b></u></blockquote>\n\n"
+            f"<blockquote>📝 <b>Expression :</b> <code>{raw_expr}</code>\n"
+            f"✅ <b>Answer :</b> <code>{result}</code></blockquote>"
+        )
+        await send_jumble_rich(client, message.chat.id, ans_text)
+    except Exception as e:
+        await message.reply_text(f"❌ Calculation Error: <code>{e}</code>", parse_mode=enums.ParseMode.HTML)
