@@ -31,7 +31,7 @@ def is_authed(user_id):
         return False
 
 
-async def is_admin_or_owner(chat, user_id):
+async def is_admin_or_owner(chat, user_id, client=None):
     if not user_id:
         return False
 
@@ -39,13 +39,27 @@ async def is_admin_or_owner(chat, user_id):
     if is_owner(user_id) or is_authed(user_id):
         return True
 
-    # 2. Extract chat object or chat_id safely
-    if hasattr(chat, "type") and chat.type == ChatType.PRIVATE:
+    # 2. Extract chat_id & type safely
+    if isinstance(chat, (int, str)):
+        chat_id = chat
+        is_priv = False
+    else:
+        chat_id = getattr(chat, "id", None)
+        is_priv = (getattr(chat, "type", None) == ChatType.PRIVATE)
+
+    if is_priv:
         return True
 
+    if not chat_id:
+        return False
+
+    # 3. Check Admin rights via client or chat object
     try:
-        if hasattr(chat, "get_member"):
-            member = await chat.get_member(user_id)
+        if client:
+            member = await client.get_chat_member(chat_id, user_id)
+            return member.status in (ChatMemberStatus.OWNER, ChatMemberStatus.ADMINISTRATOR)
+        elif hasattr(chat, "get_chat_member"):
+            member = await chat.get_chat_member(user_id)
             return member.status in (ChatMemberStatus.OWNER, ChatMemberStatus.ADMINISTRATOR)
     except Exception:
         pass
@@ -101,15 +115,10 @@ async def safe_delete_and_unpin(client, chat_id: int, message_id: int):
 
 
 async def safe_pin_and_clean(client, chat_id: int, message_id: int):
-    """
-    Message ko silently pin karta hai aur Telegram ke create kiye hue
-    service notification message ('Bot pinned Photo...') ko turant delete karta hai.
-    """
     if not message_id:
         return
     try:
         pin_res = await client.pin_chat_message(chat_id, message_id, disable_notification=True)
-        # Agar pin karne par Telegram ne alag service message ID return ki toh use clean karo
         if pin_res and hasattr(pin_res, "id") and pin_res.id != message_id:
             try:
                 await client.delete_messages(chat_id, pin_res.id)
@@ -123,40 +132,34 @@ async def send_log_event(client: Client, user, chat, word: str, raw_guess: str, 
     if not get_global_config("logging_enabled", 1):
         return
 
-    chat_title = html.escape(chat.title or "Unknown Group")
-    user_mention = get_mention(user)
-
-    buttons = []
-    buttons.append([InlineKeyboardButton(f"👤 {user.first_name} ({user.id})", url=f"tg://user?id={user.id}")])
-
-    group_row = []
-    if getattr(chat, "username", None):
-        group_row.append(InlineKeyboardButton("🌐 Public Group", url=f"https://t.me/{chat.username}"))
     try:
-        invite_link = await client.export_chat_invite_link(chat.id)
-        group_row.append(InlineKeyboardButton("🔒 Private Link", url=invite_link))
-    except Exception:
-        pass
+        chat_title = html.escape(getattr(chat, "title", "Unknown Group") or "Group")
+        user_mention = get_mention(user)
 
-    if group_row:
-        buttons.append(group_row)
+        buttons = []
+        buttons.append([InlineKeyboardButton(f"👤 {user.first_name} ({user.id})", url=f"tg://user?id={user.id}")])
 
-    log_text = (
-        "<blockquote>📝 <b>JUMBLE GUESS LOG</b>\n\n"
-        f"👤 <b>User:</b> {user_mention} (<code>{user.id}</code>)\n"
-        f"👥 <b>Group:</b> <b>{chat_title}</b> (<code>{chat.id}</code>)\n"
-        f"🧩 <b>Correct Word:</b> <code>{word.upper()}</code>\n"
-        f"💬 <b>Guessed Text:</b> <code>{raw_guess}</code>\n"
-        f"🎯 <b>Difficulty:</b> <code>{diff.title()}</code>\n"
-        f"⭐ <b>Points Awarded:</b> <code>+{points} pts</code></blockquote>"
-    )
+        group_row = []
+        if getattr(chat, "username", None):
+            group_row.append(InlineKeyboardButton("🌐 Public Group", url=f"https://t.me/{chat.username}"))
+        if group_row:
+            buttons.append(group_row)
 
-    try:
+        log_text = (
+            "<blockquote>📝 <b>JUMBLE GUESS LOG</b>\n\n"
+            f"👤 <b>User:</b> {user_mention} (<code>{user.id}</code>)\n"
+            f"👥 <b>Group:</b> <b>{chat_title}</b> (<code>{chat.id}</code>)\n"
+            f"🧩 <b>Correct Word:</b> <code>{word.upper()}</code>\n"
+            f"💬 <b>Guessed Text:</b> <code>{raw_guess}</code>\n"
+            f"🎯 <b>Difficulty:</b> <code>{diff.title()}</code>\n"
+            f"⭐ <b>Points Awarded:</b> <code>+{points} pts</code></blockquote>"
+        )
+
         await client.send_message(
-            chat_id=LOG_CHANNEL,
+            chat_id=int(LOG_CHANNEL),
             text=log_text,
             reply_markup=InlineKeyboardMarkup(buttons),
             parse_mode=ParseMode.HTML
         )
     except Exception as e:
-        print(f"Log Error: {e}")
+        print(f"[Log Channel Warning]: {e}")
