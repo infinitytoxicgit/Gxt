@@ -3,6 +3,7 @@ import os
 import time
 import importlib
 import glob
+import inspect
 from config import API_ID, API_HASH, BOT_TOKEN, OWNER_ID
 from database import DB
 from pyrogram import Client, idle, enums
@@ -14,14 +15,14 @@ app = Client(
     bot_token=BOT_TOKEN
 )
 
-# Debug listener incoming traffic track karne ke liye
+# Debug listener incoming raw messages track karne ke liye
 @app.on_message(group=-100)
 async def debug_all_incoming(client, message):
     if message.text:
         print(f"🔥 INCOMING RAW: '{message.text}' | Chat: {message.chat.id} | From: {message.from_user.id if message.from_user else 'None'}")
     message.continue_propagation()
 
-def register_plugins():
+async def register_plugins():
     print("📦 Explicitly Registering All Plugins to app...")
     plugin_files = sorted(glob.glob("plugins/*.py"))
     total_handlers = 0
@@ -37,9 +38,14 @@ def register_plugins():
                 attr = getattr(mod, attr_name)
                 if hasattr(attr, "handlers") and isinstance(getattr(attr, "handlers"), list):
                     for handler, group in getattr(attr, "handlers"):
-                        # Answers handler ko hamesha group=100 assign karein taaki commands swallow na hon
+                        # answers handler ko priority 100 do taaki commands swallow na hon
                         assigned_group = 100 if "answers" in mod_name else group
-                        app.add_handler(handler, assigned_group)
+                        
+                        # Kurigram/Pyrogram compatibility: check if add_handler is async
+                        res = app.add_handler(handler, assigned_group)
+                        if inspect.isawaitable(res):
+                            await res
+                            
                         file_handlers += 1
                         total_handlers += 1
             print(f"  ✅ {mod_name:<25} -> {file_handlers} handlers bound")
@@ -94,11 +100,12 @@ async def resume_all_active_games():
 
 async def main():
     print("🚀 Modular Jumble Bot Starting...")
-    register_plugins()
-
     await app.start()
     bot_me = await app.get_me()
     print(f"✅ Bot Online as @{bot_me.username} (ID: {bot_me.id})")
+
+    # App start hone ke baad active event loop me register karein
+    await register_plugins()
 
     asyncio.create_task(resume_all_active_games())
     asyncio.create_task(auto_backup_task())
