@@ -31,22 +31,18 @@ async def can_manage_words(client: Client, message: Message) -> tuple[bool, str]
 
     user_id = message.from_user.id
 
-    # 1. Config OWNER_ID check
     try:
         if int(user_id) == int(OWNER_ID):
             return True, ""
     except Exception:
         pass
 
-    # 2. Helper check
     if is_owner(user_id) or is_authed(user_id):
         return True, ""
 
-    # 3. Private DM check (Allow Owner/Auth, block random users)
     if message.chat.type == enums.ChatType.PRIVATE:
         return False, "❌ DM me sirf Bot Owner aur Authorized users hi words manage kar sakte hain."
 
-    # 4. Group Admin check
     try:
         member = await client.get_chat_member(message.chat.id, user_id)
         if member.status in (enums.ChatMemberStatus.OWNER, enums.ChatMemberStatus.ADMINISTRATOR):
@@ -116,6 +112,17 @@ def build_words_page(difficulty: str, page: int = 1):
     return caption, buttons
 
 
+async def update_words_rich_view(client: Client, chat_id: int, message_id: int, caption: str, buttons: list):
+    try:
+        await edit_jumble_rich(client, chat_id, message_id, caption, buttons)
+    except Exception:
+        try:
+            await client.delete_messages(chat_id, message_id)
+        except Exception:
+            pass
+        await send_jumble_rich(client, chat_id, caption, buttons)
+
+
 # ============================================================
 # WORDS BANK PANEL VIEWER (/word, /words, /wordbank)
 # ============================================================
@@ -142,7 +149,7 @@ async def words_pagination_callback(client: Client, query: CallbackQuery):
 
     caption, buttons = build_words_page(diff, page)
     await query.answer()
-    return await edit_jumble_rich(client, query.message.chat.id, query.message.id, caption, buttons)
+    return await update_words_rich_view(client, query.message.chat.id, query.message.id, caption, buttons)
 
 
 # ============================================================
