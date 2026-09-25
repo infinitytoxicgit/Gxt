@@ -10,17 +10,31 @@ from utils.rich import send_jumble_rich, edit_jumble_rich
 WORDS_PER_PAGE = 15
 VALID_DIFFS = ("easy", "medium", "hard")
 
+# Ensure table exists
+try:
+    DB.execute("""
+        CREATE TABLE IF NOT EXISTS custom_words (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            word TEXT NOT NULL,
+            difficulty TEXT NOT NULL,
+            UNIQUE(word, difficulty)
+        )
+    """)
+    DB.commit()
+except Exception as e:
+    print(f"[Custom Words Table Init]: {e}")
+
 
 async def can_manage_words(client: Client, message: Message) -> bool:
     if not message.from_user:
         return False
     user_id = message.from_user.id
-    
-    # 1. Owner & Auth bypass
+
+    # 1. Owner & Authed Admin (DM + Group dono jagah allowed)
     if is_owner(user_id) or is_authed(user_id):
         return True
 
-    # 2. Private DM allowed for authed/owner only
+    # 2. Private DM me normal users ko mana karein
     if message.chat.type == enums.ChatType.PRIVATE:
         return False
 
@@ -151,9 +165,12 @@ async def bulk_add_words_cmd(client: Client, message: Message):
         return await message.reply_text("❌ Koi valid word nahi mila! Only alphabets allowed.")
 
     builtin = set(w.lower() for w in WORDS.get(diff, []))
-    existing_custom = set(
-        r["word"].lower() for r in DB.execute("SELECT word FROM custom_words WHERE difficulty=?", (diff,)).fetchall()
-    )
+    try:
+        existing_custom = set(
+            r["word"].lower() for r in DB.execute("SELECT word FROM custom_words WHERE difficulty=?", (diff,)).fetchall()
+        )
+    except Exception:
+        existing_custom = set()
 
     added = []
     skipped = []
@@ -220,10 +237,13 @@ async def bulk_del_words_cmd(client: Client, message: Message):
 
     for w in candidates:
         w_clean = w.lower().strip()
-        cur = DB.execute("DELETE FROM custom_words WHERE difficulty=? AND word=?", (diff, w_clean))
-        if cur.rowcount > 0:
-            deleted.append(w_clean.upper())
-        else:
+        try:
+            cur = DB.execute("DELETE FROM custom_words WHERE difficulty=? AND word=?", (diff, w_clean))
+            if cur.rowcount > 0:
+                deleted.append(w_clean.upper())
+            else:
+                not_found.append(w_clean.upper())
+        except Exception:
             not_found.append(w_clean.upper())
 
     DB.commit()
