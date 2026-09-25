@@ -1,60 +1,39 @@
-import math
 import os
 import re
-import urllib.request
+import math
 import traceback
 from pyrogram import enums, types
 from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton
-from database import DB, get_global_config, set_global_config
 
-# Global switch: 'rich' ya 'inline'
+MODE_FILE = "cache/ui_mode.txt"
+
 def get_ui_mode() -> str:
     try:
-        val = get_global_config("bot_ui_mode", "rich")
-        return str(val).lower() if val else "rich"
+        if os.path.exists(MODE_FILE):
+            with open(MODE_FILE, "r") as f:
+                val = f.read().strip().lower()
+                if val in ("rich", "inline"):
+                    return val
     except Exception:
-        return "rich"
+        pass
+    return "rich"
 
 def set_ui_mode(mode: str):
-    try:
-        set_global_config("bot_ui_mode", mode.lower())
-    except Exception as e:
-        print(f"[set_ui_mode Error]: {e}")
+    os.makedirs("cache", exist_ok=True)
+    with open(MODE_FILE, "w") as f:
+        f.write(mode.lower().strip())
 
-_TAG_RE = re.compile(
-    r"<(/?)(b|i|u|a|code|emoji)(?:\s+(?:href|id)=([^>]+))?>",
-    re.IGNORECASE,
-)
-
-def _make_custom_emoji(text, eid):
-    try:
-        val = int(str(eid).strip("\"' "))
-        return types.RichTextCustomEmoji(text=text, document_id=val)
-    except Exception:
-        pass
-    try:
-        val = int(str(eid).strip("\"' "))
-        return types.RichTextCustomEmoji(text=text, custom_emoji_id=val)
-    except Exception:
-        pass
-    return text
+_TAG_RE = re.compile(r"<(/?)(b|i|u|a|code)(?:\s+(?:href)=([^>]+))?>", re.IGNORECASE)
 
 def _parse_inline(segment):
     if not segment:
         return ""
-    parts = []
-    stack = []
-    pos = 0
-
+    parts, stack, pos = [], [], 0
     for m in _TAG_RE.finditer(segment):
         if m.start() > pos:
             parts.append(segment[pos : m.start()])
         pos = m.end()
-
-        closing = m.group(1)
-        tag = m.group(2).lower()
-        attr = m.group(3)
-
+        closing, tag, attr = m.group(1), m.group(2).lower(), m.group(3)
         if not closing:
             stack.append((tag, attr, len(parts)))
         elif stack and stack[-1][0] == tag:
@@ -62,314 +41,130 @@ def _parse_inline(segment):
             inner = parts[start:]
             del parts[start:]
             inner = inner[0] if len(inner) == 1 else inner if inner else ""
-
-            if open_tag == "b":
-                parts.append(types.RichTextBold(text=inner))
-            elif open_tag == "i":
-                parts.append(types.RichTextItalic(text=inner))
-            elif open_tag == "u":
-                parts.append(types.RichTextUnderline(text=inner))
-            elif open_tag == "code":
-                parts.append(types.RichTextCode(text=inner))
-            elif open_tag == "a":
-                parts.append(types.RichTextUrl(text=inner, url=val.strip("\"' ")))
-            elif open_tag == "emoji":
-                parts.append(_make_custom_emoji(inner or "✨", val))
-
+            if open_tag == "b": parts.append(types.RichTextBold(text=inner))
+            elif open_tag == "i": parts.append(types.RichTextItalic(text=inner))
+            elif open_tag == "u": parts.append(types.RichTextUnderline(text=inner))
+            elif open_tag == "code": parts.append(types.RichTextCode(text=inner))
+            elif open_tag == "a": parts.append(types.RichTextUrl(text=inner, url=val.strip("\"' ")))
     if pos < len(segment):
         parts.append(segment[pos:])
-
-    if not parts:
-        return ""
     return parts[0] if len(parts) == 1 else parts
 
 def html_to_rich_blocks(caption_html: str):
     blocks = []
-    bq_pattern = re.compile(
-        r"<(blockquote(?:\s+[^>]*)?)>(.*?)</blockquote\s*>",
-        re.DOTALL | re.IGNORECASE,
-    )
-
-    last_idx = 0
-    for match in bq_pattern.finditer(caption_html):
-        start, end = match.span()
-        if start > last_idx:
-            pre_text = caption_html[last_idx:start].strip()
-            if pre_text:
-                for line in pre_text.split("\n"):
-                    line_clean = line.strip()
-                    if line_clean:
-                        parsed = _parse_inline(line_clean)
-                        if parsed:
-                            blocks.append(types.InputRichBlockParagraph(text=parsed))
-
-        open_tag = match.group(1).lower()
-        inner_content = match.group(2).strip()
-        is_expandable = "expandable" in open_tag
-
-        sub_paragraphs = []
-        for line in inner_content.split("\n"):
-            line_clean = line.strip()
-            if line_clean:
-                parsed = _parse_inline(line_clean)
-                if parsed:
-                    sub_paragraphs.append(types.InputRichBlockParagraph(text=parsed))
-
-        if is_expandable and hasattr(types, "InputRichBlockExpandableBlockQuotation"):
-            try:
-                blocks.append(types.InputRichBlockExpandableBlockQuotation(blocks=sub_paragraphs))
-            except Exception:
-                blocks.extend(sub_paragraphs)
-        else:
-            try:
-                blocks.append(types.InputRichBlockBlockQuotation(blocks=sub_paragraphs))
-            except Exception:
-                blocks.extend(sub_paragraphs)
-
-        last_idx = end
-
-    if last_idx < len(caption_html):
-        post_text = caption_html[last_idx:].strip()
-        if post_text:
-            for line in post_text.split("\n"):
-                line_clean = line.strip()
-                if line_clean:
-                    parsed = _parse_inline(line_clean)
-                    if parsed:
-                        blocks.append(types.InputRichBlockParagraph(text=parsed))
-
-    if not blocks:
-        for line in caption_html.split("\n"):
-            if line.strip():
-                blocks.append(types.InputRichBlockParagraph(text=_parse_inline(line.strip())))
-
+    clean_text = re.sub(r"</?blockquote[^>]*>", "", caption_html, flags=re.IGNORECASE)
+    paragraphs = []
+    for line in clean_text.strip().split("\n"):
+        line_clean = line.strip()
+        if line_clean:
+            parsed = _parse_inline(line_clean)
+            if parsed:
+                paragraphs.append(types.InputRichBlockParagraph(text=parsed))
+    if paragraphs and hasattr(types, "InputRichBlockBlockQuotation"):
+        blocks.append(types.InputRichBlockBlockQuotation(blocks=paragraphs))
+    else:
+        blocks.extend(paragraphs)
     return blocks
 
 def make_exp_slider_row(curr_exp: int, max_exp: int = 500):
     mode = get_ui_mode()
-    percentage = (curr_exp / max_exp) * 100 if max_exp else 0
-    umm = math.floor(percentage)
-    if umm <= 10:
-        bar = "─●────────"
-    elif 10 < umm <= 25:
-        bar = "──●───────"
-    elif 25 < umm <= 40:
-        bar = "────●─────"
-    elif 40 < umm <= 60:
-        bar = "─────●────"
-    elif 60 < umm <= 75:
-        bar = "──────●───"
-    elif 75 < umm <= 90:
-        bar = "────────●─"
-    else:
-        bar = "─────────●"
-
-    slider_text = f"{curr_exp} EXP  {bar}  {max_exp} EXP"
-
+    pct = (curr_exp / max_exp) * 100 if max_exp else 0
+    bar = "─●────────" if pct <= 15 else "───●──────" if pct <= 40 else "─────●────" if pct <= 70 else "───────●──"
+    txt = f"{curr_exp} EXP {bar} {max_exp} EXP"
     if mode == "inline":
-        return [InlineKeyboardButton(text=slider_text, callback_data="noop_exp_bar")]
-
+        return [InlineKeyboardButton(text=txt, callback_data="noop")]
     btn_style = getattr(enums.ButtonStyle, "DANGER", getattr(enums.ButtonStyle, "DEFAULT", None))
-    return types.InputRichBlockButtons(
-        buttons=[
-            types.RichMessageButton(
-                text=slider_text,
-                style=btn_style,
-                callback_data="noop_exp_bar",
-            )
-        ]
-    )
+    return types.InputRichBlockButtons(buttons=[types.RichMessageButton(text=txt, style=btn_style, callback_data="noop")])
 
-def _convert_to_standard_inline(rich_buttons_rows, slider_row=None):
-    standard_rows = []
-    
-    if slider_row and isinstance(slider_row, list):
-        standard_rows.append(slider_row)
-    elif slider_row and hasattr(slider_row, "buttons"):
-        slider_btns = []
-        for b in slider_row.buttons:
-            slider_btns.append(InlineKeyboardButton(text=getattr(b, "text", "EXP"), callback_data="noop_exp"))
-        if slider_btns:
-            standard_rows.append(slider_btns)
-
-    if rich_buttons_rows:
-        for r in rich_buttons_rows:
-            btns = []
+def _to_inline(buttons_rows, slider=None):
+    rows = []
+    if slider:
+        if isinstance(slider, list): rows.append(slider)
+        elif hasattr(slider, "buttons"):
+            rows.append([InlineKeyboardButton(b.text, callback_data=b.callback_data or "noop") for b in slider.buttons])
+    if buttons_rows:
+        for r in buttons_rows:
             btn_list = r.buttons if isinstance(r, types.InputRichBlockButtons) else r
-            if not isinstance(btn_list, list):
-                btn_list = [btn_list]
+            if not isinstance(btn_list, list): btn_list = [btn_list]
+            row_b = []
             for b in btn_list:
-                if isinstance(b, InlineKeyboardButton):
-                    btns.append(b)
-                else:
-                    t = getattr(b, "text", "Button")
-                    cb = getattr(b, "callback_data", None)
-                    url = getattr(b, "url", None)
-                    if url:
-                        btns.append(InlineKeyboardButton(text=t, url=url))
-                    else:
-                        btns.append(InlineKeyboardButton(text=t, callback_data=cb or "noop"))
-            if btns:
-                standard_rows.append(btns)
-    return InlineKeyboardMarkup(standard_rows) if standard_rows else None
+                if isinstance(b, InlineKeyboardButton): row_b.append(b)
+                else: row_b.append(InlineKeyboardButton(text=b.text, callback_data=b.callback_data or "noop"))
+            if row_b: rows.append(row_b)
+    return InlineKeyboardMarkup(rows) if rows else None
 
-def _resolve_photo_path(photo):
-    if not photo:
-        return None
-    if isinstance(photo, str) and (photo.startswith("http://") or photo.startswith("https://")):
-        os.makedirs("cache", exist_ok=True)
-        local_path = "cache/banner_downloaded.jpg"
-        if not os.path.exists(local_path) or os.path.getsize(local_path) == 0:
-            try:
-                req = urllib.request.Request(
-                    photo,
-                    headers={
-                        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-                    }
-                )
-                with urllib.request.urlopen(req, timeout=10) as resp, open(local_path, "wb") as f:
-                    f.write(resp.read())
-            except Exception:
-                return None
-        return local_path if (os.path.exists(local_path) and os.path.getsize(local_path) > 0) else None
-    elif isinstance(photo, str) and os.path.isfile(photo):
-        return photo if os.path.getsize(photo) > 0 else None
-    return None
-
-def _build_rich_button_blocks(rich_buttons_rows):
-    blocks = []
-    if not rich_buttons_rows:
-        return blocks
-    for row in rich_buttons_rows:
-        if isinstance(row, types.InputRichBlockButtons):
-            blocks.append(row)
-        elif isinstance(row, list):
-            clean_btns = []
-            for b in row:
-                if isinstance(b, types.RichMessageButton):
-                    clean_btns.append(b)
+def _to_rich_buttons(buttons_rows):
+    out = []
+    if not buttons_rows: return out
+    for r in buttons_rows:
+        if isinstance(r, types.InputRichBlockButtons):
+            out.append(r)
+        elif isinstance(r, list):
+            b_list = []
+            for b in r:
+                if isinstance(b, types.RichMessageButton): b_list.append(b)
                 elif isinstance(b, InlineKeyboardButton):
-                    clean_btns.append(
-                        types.RichMessageButton(
-                            text=b.text,
-                            style=enums.ButtonStyle.PRIMARY,
-                            callback_data=b.callback_data or "noop",
-                            url=b.url
-                        )
-                    )
-            if clean_btns:
-                blocks.append(types.InputRichBlockButtons(buttons=clean_btns))
-    return blocks
+                    b_list.append(types.RichMessageButton(text=b.text, style=enums.ButtonStyle.PRIMARY, callback_data=b.callback_data or "noop"))
+            if b_list:
+                out.append(types.InputRichBlockButtons(buttons=b_list))
+    return out
 
 async def send_jumble_rich(client, chat_id: int, caption_html: str, rich_buttons_rows: list = None, slider_row=None, photo=None):
     mode = get_ui_mode()
-    photo_file = _resolve_photo_path(photo)
-    inline_markup = _convert_to_standard_inline(rich_buttons_rows, slider_row)
+    has_photo = photo and os.path.isfile(photo)
 
-    # ==============================
-    # 1. INLINE MODE ENFORCED
-    # ==============================
+    # 1. INLINE MODE
     if mode == "inline":
-        if photo_file and os.path.isfile(photo_file):
+        markup = _to_inline(rich_buttons_rows, slider_row)
+        if has_photo:
             try:
-                return await client.send_photo(
-                    chat_id=chat_id,
-                    photo=photo_file,
-                    caption=caption_html,
-                    reply_markup=inline_markup,
-                    parse_mode=enums.ParseMode.HTML
-                )
-            except Exception as e:
-                print(f"[Inline Send Photo Error]: {e}")
-        return await client.send_message(
-            chat_id=chat_id,
-            text=caption_html,
-            reply_markup=inline_markup,
-            parse_mode=enums.ParseMode.HTML
-        )
-
-    # ==============================
-    # 2. PURE RICH MODE ENFORCED
-    # ==============================
-    blocks = []
-    if photo_file and os.path.isfile(photo_file) and hasattr(types, "InputRichBlockPhoto"):
-        try:
-            blocks.append(types.InputRichBlockPhoto(photo=photo_file))
-        except Exception:
-            try:
-                blocks.append(types.InputRichBlockPhoto(photo=types.InputMediaPhoto(photo_file)))
+                return await client.send_photo(chat_id=chat_id, photo=photo, caption=caption_html, reply_markup=markup, parse_mode=enums.ParseMode.HTML)
             except Exception:
                 pass
+        return await client.send_message(chat_id=chat_id, text=caption_html, reply_markup=markup, parse_mode=enums.ParseMode.HTML)
+
+    # 2. RICH MODE
+    blocks = []
+    # Agar photo block available hai
+    if has_photo and hasattr(types, "InputRichBlockPhoto"):
+        try:
+            blocks.append(types.InputRichBlockPhoto(photo=photo))
+        except Exception:
+            pass
 
     blocks.extend(html_to_rich_blocks(caption_html))
     if slider_row and isinstance(slider_row, types.InputRichBlockButtons):
         blocks.append(slider_row)
-    blocks.extend(_build_rich_button_blocks(rich_buttons_rows))
+    blocks.extend(_to_rich_buttons(rich_buttons_rows))
 
     try:
         if hasattr(client, "send_rich_message"):
-            return await client.send_rich_message(
-                chat_id=chat_id,
-                rich_message=types.InputRichMessage(blocks=blocks),
-            )
+            return await client.send_rich_message(chat_id=chat_id, rich_message=types.InputRichMessage(blocks=blocks))
     except Exception as e:
-        print(f"[send_rich_message Attempt 1 Failed]: {e}")
+        print(f"[send_rich error]: {e}")
 
     try:
-        return await client.send_message(
-            chat_id=chat_id,
-            text=" ",
-            rich_message=types.InputRichMessage(blocks=blocks)
-        )
-    except Exception as e2:
-        print(f"[Rich Message Attempt 2 Failed]: {e2}")
+        return await client.send_message(chat_id=chat_id, text=" ", rich_message=types.InputRichMessage(blocks=blocks))
+    except Exception:
+        pass
 
-    # Fallback to inline if rich fails completely
-    if photo_file and os.path.isfile(photo_file):
-        return await client.send_photo(
-            chat_id=chat_id,
-            photo=photo_file,
-            caption=caption_html,
-            reply_markup=inline_markup,
-            parse_mode=enums.ParseMode.HTML
-        )
-    return await client.send_message(
-        chat_id=chat_id,
-        text=caption_html,
-        reply_markup=inline_markup,
-        parse_mode=enums.ParseMode.HTML
-    )
+    # Rich fail hone par inline fallback
+    markup = _to_inline(rich_buttons_rows, slider_row)
+    if has_photo:
+        return await client.send_photo(chat_id=chat_id, photo=photo, caption=caption_html, reply_markup=markup, parse_mode=enums.ParseMode.HTML)
+    return await client.send_message(chat_id=chat_id, text=caption_html, reply_markup=markup, parse_mode=enums.ParseMode.HTML)
 
 async def edit_jumble_rich(client, chat_id: int, message_id: int, caption_html: str, rich_buttons_rows: list = None, slider_row=None, photo=None):
     mode = get_ui_mode()
-    inline_markup = _convert_to_standard_inline(rich_buttons_rows, slider_row)
-
     if mode == "inline":
+        markup = _to_inline(rich_buttons_rows, slider_row)
         try:
-            return await client.edit_message_caption(
-                chat_id=chat_id,
-                message_id=message_id,
-                caption=caption_html,
-                reply_markup=inline_markup,
-                parse_mode=enums.ParseMode.HTML
-            )
+            return await client.edit_message_caption(chat_id=chat_id, message_id=message_id, caption=caption_html, reply_markup=markup, parse_mode=enums.ParseMode.HTML)
         except Exception:
             try:
-                return await client.edit_message_text(
-                    chat_id=chat_id,
-                    message_id=message_id,
-                    text=caption_html,
-                    reply_markup=inline_markup,
-                    parse_mode=enums.ParseMode.HTML
-                )
+                return await client.edit_message_text(chat_id=chat_id, message_id=message_id, text=caption_html, reply_markup=markup, parse_mode=enums.ParseMode.HTML)
             except Exception:
-                try:
-                    await client.delete_messages(chat_id, message_id)
-                except Exception:
-                    pass
-                return await send_jumble_rich(client, chat_id, caption_html, rich_buttons_rows, slider_row, photo)
-
-    # In Rich Mode: Clean delete-and-resend to prevent downgrade
+                pass
     try:
         await client.delete_messages(chat_id, message_id)
     except Exception:
