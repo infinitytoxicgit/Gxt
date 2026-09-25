@@ -168,6 +168,8 @@ def _convert_to_standard_inline(rich_buttons_rows):
     for r in rich_buttons_rows:
         btns = []
         btn_list = r.buttons if isinstance(r, types.InputRichBlockButtons) else r
+        if not isinstance(btn_list, list):
+            btn_list = [btn_list]
         for b in btn_list:
             t = getattr(b, "text", "Button")
             cb = getattr(b, "callback_data", None)
@@ -196,8 +198,7 @@ def _resolve_photo_path(photo):
                 )
                 with urllib.request.urlopen(req, timeout=10) as resp, open(local_path, "wb") as f:
                     f.write(resp.read())
-            except Exception as e:
-                print(f"[Photo Download Error]: {e}")
+            except Exception:
                 return None
         return local_path if (os.path.exists(local_path) and os.path.getsize(local_path) > 0) else None
     elif isinstance(photo, str) and os.path.isfile(photo):
@@ -211,8 +212,8 @@ async def send_jumble_rich(client, chat_id: int, caption_html: str, rich_buttons
     if photo_file and os.path.isfile(photo_file):
         try:
             blocks.append(types.InputRichBlockPhoto(photo=types.InputMediaPhoto(photo_file)))
-        except Exception as pe:
-            print(f"[InputRichBlockPhoto Error]: {pe}")
+        except Exception:
+            pass
 
     blocks.extend(html_to_rich_blocks(caption_html))
     if slider_row:
@@ -224,7 +225,7 @@ async def send_jumble_rich(client, chat_id: int, caption_html: str, rich_buttons
             elif isinstance(row, list):
                 blocks.append(types.InputRichBlockButtons(buttons=row))
 
-    # Try 1: Kurigram Native Send Rich Message
+    # ATTEMPT 1: Native Kurigram Rich Message
     try:
         if hasattr(client, "send_rich_message"):
             return await client.send_rich_message(
@@ -232,9 +233,9 @@ async def send_jumble_rich(client, chat_id: int, caption_html: str, rich_buttons
                 rich_message=types.InputRichMessage(blocks=blocks),
             )
     except Exception as e:
-        print(f"[send_jumble_rich Native Error]: {e}")
+        print(f"[send_jumble_rich Info] Kurigram native rich send failed: {e}")
 
-    # Try 2: Standard Message with Rich Blocks
+    # ATTEMPT 2: Standard Message with Rich Message Payload
     try:
         return await client.send_message(
             chat_id=chat_id,
@@ -242,10 +243,22 @@ async def send_jumble_rich(client, chat_id: int, caption_html: str, rich_buttons
             rich_message=types.InputRichMessage(blocks=blocks)
         )
     except Exception as fe:
-        print(f"[send_jumble_rich Rich Fallback Error]: {fe}")
+        print(f"[send_jumble_rich Info] Rich blocks fallback failed: {fe}")
 
-    # Try 3: Standard Pyrogram HTML fallback with converted buttons
+    # ATTEMPT 3: Ironclad Guarantee (Standard HTML Message with Inline Buttons)
     inline_markup = _convert_to_standard_inline(rich_buttons_rows)
+    if photo_file and os.path.isfile(photo_file):
+        try:
+            return await client.send_photo(
+                chat_id=chat_id,
+                photo=photo_file,
+                caption=caption_html,
+                reply_markup=inline_markup,
+                parse_mode=enums.ParseMode.HTML
+            )
+        except Exception:
+            pass
+
     return await client.send_message(
         chat_id=chat_id,
         text=caption_html,
@@ -264,7 +277,7 @@ async def edit_jumble_rich(client, chat_id: int, message_id: int, caption_html: 
             elif isinstance(row, list):
                 blocks.append(types.InputRichBlockButtons(buttons=row))
 
-    # Try 1: Native edit_rich_message
+    # ATTEMPT 1: Kurigram edit_rich_message
     try:
         if hasattr(client, "edit_rich_message"):
             return await client.edit_rich_message(
@@ -275,7 +288,7 @@ async def edit_jumble_rich(client, chat_id: int, message_id: int, caption_html: 
     except Exception:
         pass
 
-    # Try 2: edit_message_text with Rich Message
+    # ATTEMPT 2: edit_message_text with Rich payload
     try:
         return await client.edit_message_text(
             chat_id=chat_id,
@@ -286,7 +299,20 @@ async def edit_jumble_rich(client, chat_id: int, message_id: int, caption_html: 
     except Exception:
         pass
 
-    # Try 3: Delete and Send Fresh
+    # ATTEMPT 3: Standard Pyrogram edit_message_text with converted inline markup
+    try:
+        inline_markup = _convert_to_standard_inline(rich_buttons_rows)
+        return await client.edit_message_text(
+            chat_id=chat_id,
+            message_id=message_id,
+            text=caption_html,
+            reply_markup=inline_markup,
+            parse_mode=enums.ParseMode.HTML
+        )
+    except Exception:
+        pass
+
+    # ATTEMPT 4: Delete & Send Fresh
     try:
         await client.delete_messages(chat_id, message_id)
     except Exception:
