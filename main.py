@@ -14,6 +14,13 @@ app = Client(
     bot_token=BOT_TOKEN
 )
 
+# Debug listener ko main() ke bahar global scope me rakhein
+@app.on_message(group=-100)
+async def debug_all_incoming(client, message):
+    if message.text:
+        print(f"🔥 INCOMING RAW: '{message.text}' | Chat: {message.chat.id} | From: {message.from_user.id if message.from_user else 'None'}")
+    message.continue_propagation()
+
 def register_plugins():
     print("📦 Explicitly Registering All Plugins to app...")
     plugin_files = sorted(glob.glob("plugins/*.py"))
@@ -28,7 +35,6 @@ def register_plugins():
             file_handlers = 0
             for attr_name in dir(mod):
                 attr = getattr(mod, attr_name)
-                # Check for handlers declared via @Client.on_message / @Client.on_callback_query
                 if hasattr(attr, "handlers") and isinstance(getattr(attr, "handlers"), list):
                     for handler, group in getattr(attr, "handlers"):
                         app.add_handler(handler, group)
