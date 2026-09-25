@@ -3,8 +3,6 @@ import os
 import time
 from config import API_ID, API_HASH, BOT_TOKEN, OWNER_ID
 from database import DB
-from helpers import ACTIVE_FIGHTS
-from plugins.game_core import start_game
 from pyrogram import Client, idle, enums
 
 app = Client(
@@ -16,7 +14,6 @@ app = Client(
 )
 
 async def auto_backup_task():
-    # Startup ke 10 second baad pehla backup verify karein
     await asyncio.sleep(10)
     while True:
         try:
@@ -30,17 +27,20 @@ async def auto_backup_task():
                 )
         except Exception as e:
             print(f"[Auto Backup Error]: {e}")
-        
-        # Har 6 ghante (21600 seconds) me next backup
+
         await asyncio.sleep(21600)
 
 async def resume_all_active_games():
+    # Lazy import to avoid circular dependency before plugins load
+    from plugins.game_core import start_game
+    from helpers import ACTIVE_FIGHTS
+
     await asyncio.sleep(3)
     try:
         rows = DB.execute("SELECT chat_id, default_diff FROM settings WHERE is_active = 1 AND chat_id != 0").fetchall()
         for row in rows:
             c_id = row["chat_id"]
-            diff = row["default_diff"] or "medium"
+            diff = row["default_diff"] or "easy"
 
             if c_id in ACTIVE_FIGHTS:
                 continue
