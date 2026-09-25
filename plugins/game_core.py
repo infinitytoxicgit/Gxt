@@ -88,7 +88,11 @@ async def start_game(client: Client, chat_id: int, difficulty: str, message_or_c
     jumbled = jumble_word(word)
     puzzle_id = random.randint(10000, 99999)
     now = time.time()
-    timer_val = int(settings.get(difficulty, 120))
+    
+    # Easy timer default 30 seconds
+    default_timer = 30 if difficulty.lower() == "easy" else 60
+    timer_val = int(settings.get(difficulty.lower(), default_timer))
+    
     reward_pts = int(get_global_config(f"points_{difficulty}", 10))
     reward_exp = int(get_global_config(f"exp_{difficulty}", 15))
     hint_limit = int(get_global_config(f"hints_{difficulty}", 3))
@@ -102,10 +106,11 @@ async def start_game(client: Client, chat_id: int, difficulty: str, message_or_c
 
     image_obj = make_puzzle_image(jumbled, difficulty, puzzle_id)
 
+    time_str = f"{timer_val}s" if timer_val < 60 else f"{timer_val // 60}m {timer_val % 60}s"
     caption_html = (
         f"<blockquote>🧩 <u><b>JUMBLE #{puzzle_id}</b></u></blockquote>\n\n"
         f"<blockquote>🎯 <b>Difficulty :</b> <code>{difficulty.title()}</code>\n"
-        f"⏱️ <b>Time :</b> <code>{timer_val // 60}m {timer_val % 60}s</code>\n"
+        f"⏱️ <b>Time :</b> <code>{time_str}</code>\n"
         f"⭐ <b>Reward :</b> <code>+{reward_pts} Points</code>\n"
         f"⚡ <b>EXP :</b> <code>+{reward_exp} EXP</code>\n"
         f"💡 <b>Hints :</b> <code>{hint_limit}/word</code></blockquote>\n\n"
@@ -186,20 +191,70 @@ async def expire_game(client: Client, chat_id: int, puzzle_id: int, expires: flo
     if chat_id not in ACTIVE_FIGHTS:
         s = dict(get_settings(chat_id)) if get_settings(chat_id) else {}
         if s.get("is_active", 1):
-            next_diff = s.get("default_diff") or "medium"
+            next_diff = s.get("default_diff") or "easy"
             asyncio.create_task(start_game(client, chat_id, next_diff, chat_id))
 
 
 # ============================================================
-# /word COMMAND HANDLER (DM + Group Supported)
+# /jumble COMMAND (AUTO-ON, EASY MODE, 30 SECONDS TIMER)
 # ============================================================
 
-@Client.on_message(filters.command(["word", "words", "puzzle", "current"]))
-async def current_word_cmd(client: Client, message: Message):
+@Client.on_message(filters.command(["jumble", "startgame"], prefixes=["/", "!", "."]))
+async def start_jumble_cmd(client: Client, message: Message):
     if message.chat.type == enums.ChatType.PRIVATE:
         return await message.reply_text(
-            "ℹ️ <code>/word</code> group ke active puzzle ke liye hota hai.\n"
-            "Bot ko kisi group me add karke <code>/jumble</code> run karein!",
+            "ℹ️ <code>/jumble</code> group ke liye hota hai! Bot ko kisi group me add karein aur wahan type karein.",
+            parse_mode=enums.ParseMode.HTML
+        )
+
+    chat_id = message.chat.id
+    user_id = message.from_user.id if message.from_user else 0
+
+    if not await check_admin_safe(message.chat, user_id):
+        return await message.reply_text("❌ Sirf Group Admins/Owner hi Jumble game activate kar sakte hain.")
+
+    if chat_id in ACTIVE_FIGHTS:
+        return await message.reply_text("⚔️ Group me 1v1 Battle chal rahi hai! Current battle khatam hone dein.")
+
+    # Auto-on in DB: is_active=1, default_diff='easy', easy=30 seconds
+    try:
+        DB.execute("""
+            INSERT INTO settings (chat_id, is_active, default_diff, easy)
+            VALUES (?, 1, 'easy', 30)
+            ON CONFLICT(chat_id) DO UPDATE SET
+                is_active = 1,
+                default_diff = 'easy',
+                easy = 30
+        """, (chat_id,))
+        DB.commit()
+    except Exception as e:
+        print(f"[Settings Update Error]: {e}")
+
+    # Check if a game is already active
+    active = DB.execute("SELECT * FROM games WHERE chat_id=? AND solved=0", (chat_id,)).fetchone()
+    if active and time.time() < active["expires"]:
+        return await message.reply_text("⚠️ Puzzle already chal raha hai! Check pinned message.")
+
+    await message.reply_text(
+        "<blockquote>🟢 <b>JUMBLE GAME ACTIVATED!</b>\n\n"
+        "🎮 <b>Mode :</b> <code>Easy</code>\n"
+        "⏱️ <b>Timer :</b> <code>30 Seconds</code>\n"
+        "🚀 <i>Spawning first puzzle now...</i></blockquote>",
+        parse_mode=enums.ParseMode.HTML
+    )
+
+    asyncio.create_task(start_game(client, chat_id, "easy", message.chat))
+
+
+# ============================================================
+# /puzzle & /current COMMAND HANDLER (Time Check Only)
+# ============================================================
+
+@Client.on_message(filters.command(["puzzle", "current", "timer"], prefixes=["/", "!", "."]))
+async def current_puzzle_status_cmd(client: Client, message: Message):
+    if message.chat.type == enums.ChatType.PRIVATE:
+        return await message.reply_text(
+            "ℹ️ <code>/puzzle</code> group ke active puzzle status ke liye hota hai.",
             parse_mode=enums.ParseMode.HTML
         )
 
@@ -283,7 +338,7 @@ async def puzzle_buttons_listener(client: Client, query: CallbackQuery):
         if not game:
             await query.answer("🔄 Spawning new puzzle...")
             s = dict(get_settings(chat_id)) if get_settings(chat_id) else {}
-            next_diff = s.get("default_diff") or "medium"
+            next_diff = s.get("default_diff") or "easy"
             return asyncio.create_task(start_game(client, chat_id, next_diff, chat_id))
 
         DB.execute("UPDATE games SET solved=1 WHERE chat_id=?", (chat_id,))
@@ -311,7 +366,7 @@ async def puzzle_buttons_listener(client: Client, query: CallbackQuery):
 
         await asyncio.sleep(1)
         if chat_id not in ACTIVE_FIGHTS and s.get("is_active", 1):
-            next_diff = s.get("default_diff") or "medium"
+            next_diff = s.get("default_diff") or "easy"
             asyncio.create_task(start_game(client, chat_id, next_diff, chat_id))
 
     elif action in ["game_newword", "newword"]:
@@ -322,7 +377,7 @@ async def puzzle_buttons_listener(client: Client, query: CallbackQuery):
         await query.answer("🧩 Naya puzzle shuru kiya ja raha hai...")
         raw_s = get_settings(chat_id)
         s = dict(raw_s) if raw_s else {}
-        next_diff = s.get("default_diff") or "medium"
+        next_diff = s.get("default_diff") or "easy"
         asyncio.create_task(start_game(client, chat_id, next_diff, chat_id))
 
 
