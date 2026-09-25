@@ -29,7 +29,6 @@ def clean_text_safe(text: str) -> str:
 
 def make_puzzle_image(jumbled, mode_tag, puzzle_id):
     width, height = 1200, 650
-    # RGB format use kiya hai taaki Telegram media stream me 100% render ho
     img = Image.new("RGB", (width, height), (15, 18, 28))
     draw = ImageDraw.Draw(img)
 
@@ -45,7 +44,7 @@ def make_puzzle_image(jumbled, mode_tag, puzzle_id):
 
     draw.rounded_rectangle([(90, 150), (width - 90, 420)], radius=24, fill=(22, 28, 44), outline=(0, 255, 180), width=2)
 
-    clean_jumbled = str(jumbled).replace(" ", "").upper()
+    clean_jumbled = str(jumbled or "").replace(" ", "").upper()
     text_len = len(clean_jumbled)
     if text_len <= 6:
         display_text = "   ".join(clean_jumbled)
@@ -62,7 +61,7 @@ def make_puzzle_image(jumbled, mode_tag, puzzle_id):
 
     draw.text((width // 2, 285), display_text, anchor="mm", font=word_font, fill=(0, 229, 255))
 
-    tag_upper = str(mode_tag).upper()
+    tag_upper = str(mode_tag or "EASY").upper()
     if "EASY" in tag_upper:
         tag_color = (0, 255, 136)
     elif "HARD" in tag_upper:
@@ -81,7 +80,14 @@ def make_puzzle_image(jumbled, mode_tag, puzzle_id):
     img.save(out_path, "PNG", optimize=True)
     return out_path
 
-def make_stats_graph_image(user_name: str, easy: int, med: int, hard: int, rank: int, exp: int, max_exp: int):
+def make_stats_graph_image(user_name: str, easy: int = 0, med: int = 0, hard: int = 0, rank: int = 1, exp: int = 0, max_exp: int = 500):
+    easy = int(easy or 0)
+    med = int(med or 0)
+    hard = int(hard or 0)
+    rank = int(rank or 1)
+    exp = int(exp or 0)
+    max_exp = int(max_exp or 500)
+
     w, h = 1100, 600
     img = Image.new("RGB", (w, h), (18, 22, 34))
     draw = ImageDraw.Draw(img)
@@ -93,7 +99,7 @@ def make_stats_graph_image(user_name: str, easy: int, med: int, hard: int, rank:
     draw.text((w // 2, 105), f"RANK: LEVEL {rank}   |   EXP: {exp} / {max_exp}", font=get_font(24, bold=True), fill=(0, 220, 255), anchor="mm")
 
     draw.rounded_rectangle([(90, 140), (w - 90, 172)], radius=16, fill=(35, 42, 60))
-    ratio = min(max(exp / max_exp, 0.0), 1.0) if max_exp else 0
+    ratio = min(max(exp / max_exp, 0.0), 1.0) if max_exp > 0 else 0
     if ratio > 0:
         draw.rounded_rectangle([(90, 140), (90 + int((w - 180) * ratio), 172)], radius=16, fill=(0, 230, 160))
 
@@ -119,7 +125,7 @@ def make_stats_graph_image(user_name: str, easy: int, med: int, hard: int, rank:
     img.save(out_path, "PNG", optimize=True)
     return out_path
 
-def make_leaderboard_graph_image(scope_title: str, timeframe: str, top_data: list):
+def make_leaderboard_graph_image(scope_title: str, timeframe: str, top_data: list = None):
     w, h = 1100, 680
     img = Image.new("RGB", (w, h), (16, 20, 30))
     draw = ImageDraw.Draw(img)
@@ -131,19 +137,22 @@ def make_leaderboard_graph_image(scope_title: str, timeframe: str, top_data: lis
     draw.text((w // 2, 60), f"LEADERBOARD - {clean_scope.upper()}", font=get_font(34, bold=True), fill=(255, 255, 255), anchor="mm")
     draw.text((w // 2, 105), f"TIMEFRAME: {clean_tf.upper()}", font=get_font(24, bold=True), fill=(0, 220, 255), anchor="mm")
 
-    if not top_data:
+    # Safe validation agar top_data None ho ya empty
+    if not top_data or not isinstance(top_data, list):
         draw.text((w // 2, 350), "No solves recorded in this timeframe yet.", font=get_font(26, bold=False), fill=(180, 190, 210), anchor="mm")
     else:
-        max_score = max(1, top_data[0]["score"])
+        first_score = top_data[0].get("score") if isinstance(top_data[0], dict) else 1
+        max_score = max(1, int(first_score or 1))
         colors = [(255, 215, 0), (192, 192, 192), (205, 127, 50), (0, 220, 255), (0, 255, 150)]
 
         start_y = 160
-        for idx, row in enumerate(top_data[:5]):
+        valid_rows = [r for r in top_data[:5] if isinstance(r, dict)]
+        for idx, row in enumerate(valid_rows):
             y = start_y + (idx * 90)
             color = colors[idx] if idx < len(colors) else (180, 200, 220)
 
-            name = clean_text_safe(str(row["name"]))[:14]
-            score = row["score"]
+            name = clean_text_safe(str(row.get("name", "Player")))[:14]
+            score = int(row.get("score") or 0)
 
             draw.text((90, y), f"#{idx + 1}  {name}", font=get_font(26, bold=True), fill=(255, 255, 255))
             draw.text((w - 90, y), f"{score} Stars", font=get_font(26, bold=True), fill=color, anchor="ra")
