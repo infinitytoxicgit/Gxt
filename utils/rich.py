@@ -4,24 +4,6 @@ import math
 from pyrogram import enums, types
 from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 
-MODE_FILE = "cache/ui_mode.txt"
-
-def get_ui_mode() -> str:
-    try:
-        if os.path.exists(MODE_FILE):
-            with open(MODE_FILE, "r") as f:
-                val = f.read().strip().lower()
-                if val in ("rich", "inline"):
-                    return val
-    except Exception:
-        pass
-    return "rich"
-
-def set_ui_mode(mode: str):
-    os.makedirs("cache", exist_ok=True)
-    with open(MODE_FILE, "w") as f:
-        f.write(mode.lower().strip())
-
 _TAG_RE = re.compile(r"<(/?)(b|i|u|a|code)(?:\s+(?:href)=([^>]+))?>", re.IGNORECASE)
 
 def _parse_inline(segment):
@@ -66,36 +48,11 @@ def html_to_rich_blocks(caption_html: str):
     return blocks
 
 def make_exp_slider_row(curr_exp: int, max_exp: int = 500):
-    mode = get_ui_mode()
     pct = (curr_exp / max_exp) * 100 if max_exp else 0
     bar = "─●────────" if pct <= 15 else "───●──────" if pct <= 40 else "─────●────" if pct <= 70 else "───────●──"
     txt = f"{curr_exp} EXP {bar} {max_exp} EXP"
-    if mode == "inline":
-        return [InlineKeyboardButton(text=txt, callback_data="noop_exp_bar")]
     btn_style = getattr(enums.ButtonStyle, "DANGER", getattr(enums.ButtonStyle, "DEFAULT", None))
-    return types.InputRichBlockButtons(buttons=[types.RichMessageButton(text=txt, style=btn_style, callback_data="noop_exp_bar")])
-
-def _to_inline(buttons_rows, slider=None):
-    rows = []
-    if slider:
-        if isinstance(slider, list):
-            rows.append(slider)
-        elif hasattr(slider, "buttons"):
-            rows.append([InlineKeyboardButton(b.text, callback_data=getattr(b, "callback_data", "noop")) for b in slider.buttons])
-    if buttons_rows:
-        for r in buttons_rows:
-            btn_list = r.buttons if isinstance(r, types.InputRichBlockButtons) else r
-            if not isinstance(btn_list, list):
-                btn_list = [btn_list]
-            row_b = []
-            for b in btn_list:
-                if isinstance(b, InlineKeyboardButton):
-                    row_b.append(b)
-                else:
-                    row_b.append(InlineKeyboardButton(text=b.text, callback_data=getattr(b, "callback_data", "noop")))
-            if row_b:
-                rows.append(row_b)
-    return InlineKeyboardMarkup(rows) if rows else None
+    return types.InputRichBlockButtons(buttons=[types.RichMessageButton(text=txt, style=btn_style, callback_data="noop")])
 
 def _to_rich_buttons(buttons_rows):
     out = []
@@ -115,33 +72,38 @@ def _to_rich_buttons(buttons_rows):
                 out.append(types.InputRichBlockButtons(buttons=b_list))
     return out
 
+def _to_inline(buttons_rows, slider=None):
+    rows = []
+    if slider and hasattr(slider, "buttons"):
+        rows.append([InlineKeyboardButton(b.text, callback_data="noop") for b in slider.buttons])
+    if buttons_rows:
+        for r in buttons_rows:
+            btn_list = r.buttons if isinstance(r, types.InputRichBlockButtons) else r
+            if not isinstance(btn_list, list):
+                btn_list = [btn_list]
+            row_b = []
+            for b in btn_list:
+                if isinstance(b, InlineKeyboardButton):
+                    row_b.append(b)
+                else:
+                    row_b.append(InlineKeyboardButton(text=b.text, callback_data=getattr(b, "callback_data", "noop")))
+            if row_b:
+                rows.append(row_b)
+    return InlineKeyboardMarkup(rows) if rows else None
+
 async def send_jumble_rich(client, chat_id: int, caption_html: str, rich_buttons_rows: list = None, slider_row=None, photo=None):
-    mode = get_ui_mode()
-    has_photo = bool(photo and os.path.isfile(photo))
-
-    # 1. INLINE MODE
-    if mode == "inline":
-        markup = _to_inline(rich_buttons_rows, slider_row)
-        if has_photo:
-            try:
-                return await client.send_photo(chat_id=chat_id, photo=photo, caption=caption_html, reply_markup=markup, parse_mode=enums.ParseMode.HTML)
-            except Exception as e:
-                print(f"[send_jumble_rich inline photo error]: {e}")
-        return await client.send_message(chat_id=chat_id, text=caption_html, reply_markup=markup, parse_mode=enums.ParseMode.HTML)
-
-    # 2. RICH MODE
     blocks = []
-    if has_photo:
+    has_photo = bool(photo and isinstance(photo, str) and os.path.isfile(photo))
+
+    # Kurigram Native Rich Photo handling (Pass exact file path string)
+    if has_photo and hasattr(types, "InputRichBlockPhoto"):
         try:
-            # Pass open file stream to prevent 'str' object has no attribute 'write'
-            photo_stream = open(photo, "rb")
-            blocks.append(types.InputRichBlockPhoto(photo=types.InputMediaPhoto(media=photo_stream)))
-        except Exception as pe:
-            print(f"[Photo stream block error]: {pe}")
+            blocks.append(types.InputRichBlockPhoto(photo=types.InputMediaPhoto(media=photo)))
+        except Exception as e1:
             try:
-                blocks.append(types.InputRichBlockPhoto(photo=types.InputMediaPhoto(photo)))
-            except Exception:
-                pass
+                blocks.append(types.InputRichBlockPhoto(photo=photo))
+            except Exception as e2:
+                print(f"[Photo Block Error]: {e1} | {e2}")
 
     blocks.extend(html_to_rich_blocks(caption_html))
     if slider_row and isinstance(slider_row, types.InputRichBlockButtons):
@@ -149,27 +111,20 @@ async def send_jumble_rich(client, chat_id: int, caption_html: str, rich_buttons
     blocks.extend(_to_rich_buttons(rich_buttons_rows))
 
     try:
-        return await client.send_rich_message(chat_id=chat_id, rich_message=types.InputRichMessage(blocks=blocks))
+        return await client.send_rich_message(
+            chat_id=chat_id,
+            rich_message=types.InputRichMessage(blocks=blocks)
+        )
     except Exception as e:
-        print(f"[send_rich_message failed]: {e}")
+        print(f"[send_rich_message direct failed]: {e}")
 
-    # Fallback to standard inline
+    # Fallback to prevent silent drops
     markup = _to_inline(rich_buttons_rows, slider_row)
     if has_photo:
         return await client.send_photo(chat_id=chat_id, photo=photo, caption=caption_html, reply_markup=markup, parse_mode=enums.ParseMode.HTML)
     return await client.send_message(chat_id=chat_id, text=caption_html, reply_markup=markup, parse_mode=enums.ParseMode.HTML)
 
 async def edit_jumble_rich(client, chat_id: int, message_id: int, caption_html: str, rich_buttons_rows: list = None, slider_row=None, photo=None):
-    mode = get_ui_mode()
-    if mode == "inline":
-        markup = _to_inline(rich_buttons_rows, slider_row)
-        try:
-            return await client.edit_message_caption(chat_id=chat_id, message_id=message_id, caption=caption_html, reply_markup=markup, parse_mode=enums.ParseMode.HTML)
-        except Exception:
-            try:
-                return await client.edit_message_text(chat_id=chat_id, message_id=message_id, text=caption_html, reply_markup=markup, parse_mode=enums.ParseMode.HTML)
-            except Exception:
-                pass
     try:
         await client.delete_messages(chat_id, message_id)
     except Exception:
