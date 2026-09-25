@@ -8,12 +8,13 @@ from helpers import get_mention, is_admin_or_owner, is_authed, is_owner
 from image_gen import make_stats_graph_image, make_leaderboard_graph_image
 from utils.rich import send_jumble_rich, edit_jumble_rich, make_exp_slider_row, html_to_rich_blocks
 
+VALID_PREFIXES = ["/", "!", "."]
 
 # ============================================================
 # PRIVACY SETTINGS (/public, /private)
 # ============================================================
 
-@Client.on_message(filters.command(["public", "setpublic"]))
+@Client.on_message(filters.command(["public", "setpublic"], prefixes=VALID_PREFIXES))
 async def set_public_mode(client: Client, message: Message):
     ensure_user(message.from_user)
     DB.execute("UPDATE users SET is_private = 0 WHERE user_id = ?", (message.from_user.id,))
@@ -21,7 +22,7 @@ async def set_public_mode(client: Client, message: Message):
     await message.reply_text("<blockquote>🌐 <b>Profile Status: PUBLIC</b>\nAapka name leaderboard aur stats me profile link ke sath tag hoga.</blockquote>", parse_mode=enums.ParseMode.HTML)
 
 
-@Client.on_message(filters.command(["private", "setprivate"]))
+@Client.on_message(filters.command(["private", "setprivate"], prefixes=VALID_PREFIXES))
 async def set_private_mode(client: Client, message: Message):
     ensure_user(message.from_user)
     DB.execute("UPDATE users SET is_private = 1 WHERE user_id = ?", (message.from_user.id,))
@@ -33,7 +34,7 @@ async def set_private_mode(client: Client, message: Message):
 # REWARDS: /daily (DM ONLY) & /bonus (GROUP ADMIN VERIFIED)
 # ============================================================
 
-@Client.on_message(filters.command(["daily"]))
+@Client.on_message(filters.command(["daily"], prefixes=VALID_PREFIXES))
 async def daily_cmd(client: Client, message: Message):
     if message.chat.type != enums.ChatType.PRIVATE:
         return await message.reply_text("<blockquote>ℹ️ <b>/daily</b> sirf Bot ke <b>DM (Private Chat)</b> me claim ho sakta hai!</blockquote>", parse_mode=enums.ParseMode.HTML)
@@ -71,7 +72,7 @@ async def daily_cmd(client: Client, message: Message):
     await send_jumble_rich(client, message.chat.id, caption)
 
 
-@Client.on_message(filters.command(["bonus"]))
+@Client.on_message(filters.command(["bonus"], prefixes=VALID_PREFIXES))
 async def group_bonus_cmd(client: Client, message: Message):
     if message.chat.type == enums.ChatType.PRIVATE:
         return await message.reply_text("<blockquote>❌ <b>/bonus</b> group ke andar run karein jahan aapne bot ko admin banaya ho!</blockquote>", parse_mode=enums.ParseMode.HTML)
@@ -80,12 +81,10 @@ async def group_bonus_cmd(client: Client, message: Message):
     user_id = message.from_user.id
     ensure_user(message.from_user)
 
-    # 1. Check if group bonus already claimed
     already = DB.execute("SELECT * FROM group_bonus WHERE chat_id=?", (chat_id,)).fetchone()
     if already:
         return await message.reply_text("<blockquote>❌ Is group ka bonus pehle hi claim kiya ja chuka hai! Ek group ka bonus sirf 1 baar milta hai.</blockquote>", parse_mode=enums.ParseMode.HTML)
 
-    # 2. Check if bot is Admin in this group
     try:
         bot_member = await client.get_chat_member(chat_id, (await client.get_me()).id)
         if bot_member.status not in (enums.ChatMemberStatus.ADMINISTRATOR, enums.ChatMemberStatus.OWNER):
@@ -113,7 +112,7 @@ async def group_bonus_cmd(client: Client, message: Message):
 # OWNER / AUTH COMMANDS: /setdaily, /setbonus, /addstar, /deductstar
 # ============================================================
 
-@Client.on_message(filters.command(["setdaily"]))
+@Client.on_message(filters.command(["setdaily"], prefixes=VALID_PREFIXES))
 async def set_daily_amount_cmd(client: Client, message: Message):
     if not await is_admin_or_owner(message.chat, message.from_user.id):
         return await message.reply_text("❌ Only Owner/Auth can change daily reward.")
@@ -125,7 +124,7 @@ async def set_daily_amount_cmd(client: Client, message: Message):
     await message.reply_text(f"<blockquote>✅ Daily Bonus set to: <b>+{val} Stars</b></blockquote>", parse_mode=enums.ParseMode.HTML)
 
 
-@Client.on_message(filters.command(["setbonus"]))
+@Client.on_message(filters.command(["setbonus"], prefixes=VALID_PREFIXES))
 async def set_group_bonus_amount_cmd(client: Client, message: Message):
     if not await is_admin_or_owner(message.chat, message.from_user.id):
         return await message.reply_text("❌ Only Owner/Auth can change group addition bonus.")
@@ -153,7 +152,8 @@ async def _resolve_user_target(client: Client, message: Message):
                 pass
     return None
 
-@Client.on_message(filters.command(["addstar", "addstars", "addpoint", "addpoints"]))
+
+@Client.on_message(filters.command(["addstar", "addstars", "addpoint", "addpoints"], prefixes=VALID_PREFIXES))
 async def add_stars_cmd(client: Client, message: Message):
     if not is_owner(message.from_user.id) and not is_authed(message.from_user.id):
         return await message.reply_text("❌ Sirf Bot Owner & Auth Admins balance add kar sakte hain.")
@@ -182,7 +182,7 @@ async def add_stars_cmd(client: Client, message: Message):
     )
 
 
-@Client.on_message(filters.command(["deductstar", "deductstars", "removestar", "removestars"]))
+@Client.on_message(filters.command(["deductstar", "deductstars", "removestar", "removestars"], prefixes=VALID_PREFIXES))
 async def deduct_stars_cmd(client: Client, message: Message):
     if not is_owner(message.from_user.id) and not is_authed(message.from_user.id):
         return await message.reply_text("❌ Sirf Bot Owner & Auth Admins balance deduct kar sakte hain.")
@@ -276,7 +276,7 @@ def get_stats_content_and_image(target, user_data):
     return caption_html, buttons, slider, img_path
 
 
-@Client.on_message(filters.command(["stats", "stat", "mystats", "score"]))
+@Client.on_message(filters.command(["stats", "stat", "mystats", "score"], prefixes=VALID_PREFIXES))
 async def stats_cmd(client: Client, message: Message):
     target = message.from_user
     if message.reply_to_message and message.reply_to_message.from_user:
@@ -387,7 +387,7 @@ def build_leaderboard_card(scope: str = "global", period: str = "all", chat_id: 
     return caption, buttons, graph_img
 
 
-@Client.on_message(filters.command(["leaderboard", "lb", "top"]))
+@Client.on_message(filters.command(["leaderboard", "lb", "top"], prefixes=VALID_PREFIXES))
 async def leaderboard_cmd(client: Client, message: Message):
     caption, buttons, graph_img = build_leaderboard_card("global", "all", message.chat.id)
     await send_jumble_rich(client, message.chat.id, caption, buttons, photo=graph_img)
@@ -414,7 +414,7 @@ async def lb_view_callback(client: Client, query: CallbackQuery):
         await client.edit_message_text(
             chat_id=query.message.chat.id,
             message_id=query.message.id,
-            text="",
+            text=" ",
             rich_message=types.InputRichMessage(blocks=blocks)
         )
     except Exception:
@@ -437,7 +437,7 @@ async def refresh_lb_callback(client: Client, query: CallbackQuery):
         await client.edit_message_text(
             chat_id=query.message.chat.id,
             message_id=query.message.id,
-            text="",
+            text=" ",
             rich_message=types.InputRichMessage(blocks=blocks)
         )
     except Exception:
