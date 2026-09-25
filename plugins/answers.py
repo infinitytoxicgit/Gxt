@@ -15,14 +15,16 @@ from pyrogram.types import Message
 from utils.rich import send_jumble_rich
 
 
-@Client.on_message(filters.text & filters.group, group=10)
+# GROUP=100 RAKHO TAUB KABHI BHI COMMANDS KO BLOCK NA KARE
+@Client.on_message(filters.text & filters.group, group=100)
 async def group_answer_handler(client: Client, message: Message):
     if not message.from_user or not message.text:
+        message.continue_propagation()
         return
 
     txt = message.text.strip()
 
-    # Skip any commands instantly so command handlers process them freely
+    # COMMAND AAYE TOH AAGE PASS KARO!
     if txt.startswith(("/", "!", ".")):
         message.continue_propagation()
         return
@@ -31,20 +33,24 @@ async def group_answer_handler(client: Client, message: Message):
     user_id = message.from_user.id
     cleaned_input = clean_answer(txt)
     if not cleaned_input:
+        message.continue_propagation()
         return
 
     if chat_id in ACTIVE_FIGHTS:
+        message.continue_propagation()
         return
 
     now = time.time()
 
     game = DB.execute("SELECT * FROM games WHERE chat_id=? AND solved=0", (chat_id,)).fetchone()
     if not game or now > game["expires"]:
+        message.continue_propagation()
         return
 
     if cleaned_input == clean_answer(game["word"]):
         updated = DB.execute("UPDATE games SET solved=1 WHERE chat_id=? AND solved=0", (chat_id,))
         if updated.rowcount != 1:
+            message.continue_propagation()
             return
         DB.commit()
 
@@ -186,3 +192,5 @@ async def group_answer_handler(client: Client, message: Message):
                 asyncio.create_task(start_game(client, chat_id, next_diff, chat_id))
         except Exception as ge:
             print(f"[Spawn Next Error]: {ge}")
+    else:
+        message.continue_propagation()
