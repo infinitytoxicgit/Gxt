@@ -224,6 +224,51 @@ async def direct_master_router(client, message):
             traceback.print_exc()
         return
 
+    # 11. ADMIN, UPDATE & SYSTEM OPERATIONS
+    if cmd in ("/update", "/pull", "/restart", "/reboot"):
+        try:
+            from plugins import admin
+            update_fn = getattr(admin, "update_bot_cmd", getattr(admin, "update_cmd", getattr(admin, "restart_cmd", None)))
+            if update_fn:
+                await update_fn(client, message)
+            else:
+                msg = await message.reply_text("🔄 <b>Restarting bot instance...</b>", parse_mode=enums.ParseMode.HTML)
+                os.system("git pull")
+                os.execv(sys.executable, [sys.executable] + sys.argv)
+        except Exception as e:
+            print(f"🔥 Error in {cmd}: {e}")
+            traceback.print_exc()
+        return
+
+    if cmd in ("/broadcast", "/gcast"):
+        try:
+            from plugins.admin import broadcast_cmd
+            await broadcast_cmd(client, message)
+        except Exception as e:
+            print(f"🔥 Error in {cmd}: {e}")
+        return
+
+    if cmd in ("/backup", "/dbbackup"):
+        try:
+            from plugins import backup
+            backup_fn = getattr(backup, "manual_backup_cmd", getattr(backup, "backup_cmd", None))
+            if backup_fn:
+                await backup_fn(client, message)
+            else:
+                if os.path.exists("jumble_game.db"):
+                    await client.send_document(message.chat.id, "jumble_game.db", caption="📦 <b>Current SQLite Database</b>")
+        except Exception as e:
+            print(f"🔥 Error in {cmd}: {e}")
+        return
+
+    if cmd in ("/setexp", "/setstars", "/setpoints", "/resetuser"):
+        try:
+            from plugins.admin import admin_manage_user_cmd
+            await admin_manage_user_cmd(client, message)
+        except Exception as e:
+            print(f"🔥 Error in {cmd}: {e}")
+        return
+
 
 async def register_plugins():
     print("📦 Explicitly Registering All Callback Handlers...")
