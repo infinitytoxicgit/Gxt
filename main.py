@@ -1,6 +1,8 @@
 import asyncio
 import os
 import time
+import importlib
+import glob
 from config import API_ID, API_HASH, BOT_TOKEN, OWNER_ID
 from database import DB
 from pyrogram import Client, idle, enums
@@ -9,9 +11,35 @@ app = Client(
     "advanced_jumble_bot",
     api_id=API_ID,
     api_hash=API_HASH,
-    bot_token=BOT_TOKEN,
-    plugins=dict(root="plugins")
+    bot_token=BOT_TOKEN
 )
+
+def register_plugins():
+    print("📦 Explicitly Registering All Plugins to app...")
+    plugin_files = sorted(glob.glob("plugins/*.py"))
+    total_handlers = 0
+
+    for file_path in plugin_files:
+        mod_name = file_path.replace("/", ".").replace("\\", ".")[:-3]
+        if mod_name.endswith("__init__"):
+            continue
+        try:
+            mod = importlib.import_module(mod_name)
+            file_handlers = 0
+            for attr_name in dir(mod):
+                attr = getattr(mod, attr_name)
+                # Check for handlers declared via @Client.on_message / @Client.on_callback_query
+                if hasattr(attr, "handlers") and isinstance(getattr(attr, "handlers"), list):
+                    for handler, group in getattr(attr, "handlers"):
+                        app.add_handler(handler, group)
+                        file_handlers += 1
+                        total_handlers += 1
+            print(f"  ✅ {mod_name:<25} -> {file_handlers} handlers bound")
+        except Exception as e:
+            print(f"  ❌ Failed to load {mod_name}: {e}")
+
+    print(f"🎯 Total Handlers Active in Dispatcher: {total_handlers}\n")
+
 
 async def auto_backup_task():
     await asyncio.sleep(10)
@@ -29,6 +57,7 @@ async def auto_backup_task():
             print(f"[Auto Backup Error]: {e}")
 
         await asyncio.sleep(21600)
+
 
 async def resume_all_active_games():
     from plugins.game_core import start_game
@@ -54,15 +83,11 @@ async def resume_all_active_games():
     except Exception as err:
         print(f"[Resume Query Error]: {err}")
 
-# Live logger (group=-100 ensures it never blocks any command)
-@app.on_message(group=-100)
-async def incoming_tracker(client, message):
-    if message.text and message.text.startswith(("/", "!", ".")):
-        print(f"⚡ [COMMAND RECEIVED]: {message.text} | Chat: {message.chat.id}")
-    message.continue_propagation()
 
 async def main():
     print("🚀 Modular Jumble Bot Starting...")
+    register_plugins()
+
     await app.start()
     bot_me = await app.get_me()
     print(f"✅ Bot Online as @{bot_me.username} (ID: {bot_me.id})")
@@ -72,6 +97,7 @@ async def main():
 
     await idle()
     await app.stop()
+
 
 if __name__ == "__main__":
     loop = asyncio.get_event_loop()
