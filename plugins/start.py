@@ -6,7 +6,7 @@ from database import ensure_user, get_user
 from helpers import get_mention
 from utils.rich import send_jumble_rich
 
-START_BANNER_URL = "https://graph.org/file/ffb08ae20a8b09595d9ee-0798422a09215f7dc2.jpg"
+START_BANNER_URL = "https://instasize.com/api/image/bc41e511d9966b848563057e4b4f0a1e091090ae5c78f1a23c06dd63ab4aea41.jpeg"
 FALLBACK_BANNER_URL = "https://envs.sh/bIu.jpg"
 LOCAL_BANNER_PATH = "cache/start_banner.jpg"
 
