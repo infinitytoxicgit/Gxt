@@ -1,12 +1,12 @@
 import math
 import re
 from pyrogram import Client, filters, enums, types
-from pyrogram.types import Message, CallbackQuery
+from pyrogram.types import Message, CallbackQuery, InlineKeyboardButton
 from config import OWNER_ID
 from database import DB
 from helpers import is_owner, is_authed
 from word_bank import WORDS
-from utils.rich import send_jumble_rich, edit_jumble_rich
+from utils.rich import send_jumble_rich, edit_jumble_rich, create_rich_button
 
 WORDS_PER_PAGE = 15
 VALID_DIFFS = ("easy", "medium", "hard")
@@ -96,24 +96,24 @@ def build_words_page(difficulty: str, page: int = 1):
 
     nav_row = []
     if page > 1:
-        nav_row.append(types.RichMessageButton(text="◀️ Prev", style=enums.ButtonStyle.PRIMARY, callback_data=f"wpage|{difficulty}|{page - 1}"))
+        nav_row.append(create_rich_button(text="◀️ Prev", callback_data=f"wpage|{difficulty}|{page - 1}"))
 
-    nav_row.append(types.RichMessageButton(text=f"📄 {page}/{total_pages}", style=enums.ButtonStyle.SECONDARY, callback_data="noop"))
+    nav_row.append(create_rich_button(text=f"📄 {page}/{total_pages}", callback_data="noop"))
 
     if page < total_pages:
-        nav_row.append(types.RichMessageButton(text="Next ▶️", style=enums.ButtonStyle.PRIMARY, callback_data=f"wpage|{difficulty}|{page + 1}"))
+        nav_row.append(create_rich_button(text="Next ▶️", callback_data=f"wpage|{difficulty}|{page + 1}"))
 
-    buttons = [
-        nav_row,
-        [
-            types.RichMessageButton(text="🟢 Easy" if difficulty == "easy" else "⚪ Easy", style=enums.ButtonStyle.SUCCESS if difficulty == "easy" else enums.ButtonStyle.PRIMARY, callback_data="wpage|easy|1"),
-            types.RichMessageButton(text="🟢 Medium" if difficulty == "medium" else "⚪ Medium", style=enums.ButtonStyle.SUCCESS if difficulty == "medium" else enums.ButtonStyle.PRIMARY, callback_data="wpage|medium|1"),
-            types.RichMessageButton(text="🟢 Hard" if difficulty == "hard" else "⚪ Hard", style=enums.ButtonStyle.SUCCESS if difficulty == "hard" else enums.ButtonStyle.PRIMARY, callback_data="wpage|hard|1"),
-        ],
-        [
-            types.RichMessageButton(text="❌ Close Panel", style=enums.ButtonStyle.DANGER, callback_data="wpage_close")
-        ]
+    tab_row = [
+        create_rich_button(text="🟢 Easy" if difficulty == "easy" else "⚪ Easy", callback_data="wpage|easy|1"),
+        create_rich_button(text="🟢 Medium" if difficulty == "medium" else "⚪ Medium", callback_data="wpage|medium|1"),
+        create_rich_button(text="🟢 Hard" if difficulty == "hard" else "⚪ Hard", callback_data="wpage|hard|1"),
     ]
+
+    close_row = [
+        create_rich_button(text="❌ Close Panel", callback_data="wpage_close")
+    ]
+
+    buttons = [nav_row, tab_row, close_row]
     return caption, buttons
 
 
