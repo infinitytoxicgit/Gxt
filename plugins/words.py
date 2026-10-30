@@ -94,23 +94,54 @@ def build_words_page(difficulty: str, page: int = 1):
         "➖ <b>Bulk Del :</b> <code>/delword [mode] word1 word2 word3</code></blockquote>"
     )
 
+    # 1. Navigation Row (Primary Blue)
     nav_row = []
     if page > 1:
-        nav_row.append(create_rich_button(text="◀️ Prev", callback_data=f"wpage|{difficulty}|{page - 1}"))
+        nav_row.append(create_rich_button(
+            text="◀️ Prev", 
+            callback_data=f"wpage|{difficulty}|{page - 1}", 
+            style=enums.ButtonStyle.PRIMARY
+        ))
 
-    nav_row.append(create_rich_button(text=f"📄 {page}/{total_pages}", callback_data="noop"))
+    nav_row.append(create_rich_button(
+        text=f"📄 {page}/{total_pages}", 
+        callback_data="noop",
+        style=enums.ButtonStyle.PRIMARY
+    ))
 
     if page < total_pages:
-        nav_row.append(create_rich_button(text="Next ▶️", callback_data=f"wpage|{difficulty}|{page + 1}"))
+        nav_row.append(create_rich_button(
+            text="Next ▶️", 
+            callback_data=f"wpage|{difficulty}|{page + 1}", 
+            style=enums.ButtonStyle.PRIMARY
+        ))
 
+    # 2. Category Row (Active = SUCCESS Green, Inactive = PRIMARY Blue)
     tab_row = [
-        create_rich_button(text="🟢 Easy" if difficulty == "easy" else "⚪ Easy", callback_data="wpage|easy|1"),
-        create_rich_button(text="🟢 Medium" if difficulty == "medium" else "⚪ Medium", callback_data="wpage|medium|1"),
-        create_rich_button(text="🟢 Hard" if difficulty == "hard" else "⚪ Hard", callback_data="wpage|hard|1"),
+        create_rich_button(
+            text="🟢 Easy" if difficulty == "easy" else "⚪ Easy", 
+            callback_data="wpage|easy|1", 
+            style=enums.ButtonStyle.SUCCESS if difficulty == "easy" else enums.ButtonStyle.PRIMARY
+        ),
+        create_rich_button(
+            text="🟢 Medium" if difficulty == "medium" else "⚪ Medium", 
+            callback_data="wpage|medium|1", 
+            style=enums.ButtonStyle.SUCCESS if difficulty == "medium" else enums.ButtonStyle.PRIMARY
+        ),
+        create_rich_button(
+            text="🟢 Hard" if difficulty == "hard" else "⚪ Hard", 
+            callback_data="wpage|hard|1", 
+            style=enums.ButtonStyle.SUCCESS if difficulty == "hard" else enums.ButtonStyle.PRIMARY
+        ),
     ]
 
+    # 3. Action Row (DANGER Red)
     close_row = [
-        create_rich_button(text="❌ Close Panel", callback_data="wpage_close")
+        create_rich_button(
+            text="❌ Close Panel", 
+            callback_data="wpage_close", 
+            style=enums.ButtonStyle.DANGER
+        )
     ]
 
     buttons = [nav_row, tab_row, close_row]
