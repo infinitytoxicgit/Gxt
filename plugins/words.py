@@ -94,7 +94,7 @@ def build_words_page(difficulty: str, page: int = 1):
         "➖ <b>Bulk Del :</b> <code>/delword [mode] word1 word2 word3</code></blockquote>"
     )
 
-    # 1. Navigation Row (PRIMARY = Blue)
+    # 1. Navigation Row (Primary Blue Colors)
     nav_row = []
     if page > 1:
         nav_row.append(create_rich_button(
@@ -103,7 +103,6 @@ def build_words_page(difficulty: str, page: int = 1):
             style=enums.ButtonStyle.PRIMARY
         ))
 
-    # Page indicator (No hardcoded secondary, uses safe default)
     nav_row.append(create_rich_button(
         text=f"📄 {page}/{total_pages}", 
         callback_data="noop"
@@ -116,26 +115,26 @@ def build_words_page(difficulty: str, page: int = 1):
             style=enums.ButtonStyle.PRIMARY
         ))
 
-    # 2. Difficulty Tabs (SUCCESS = Green for active, PRIMARY = Blue for inactive)
+    # 2. Difficulty Tabs (Selected = SUCCESS Green, Unselected = PRIMARY Blue)
     tab_row = [
         create_rich_button(
-            text="🟢 Easy" if difficulty == "easy" else "Easy",
+            text="🟢 Easy" if difficulty == "easy" else "⚪ Easy",
             callback_data="wpage|easy|1",
             style=enums.ButtonStyle.SUCCESS if difficulty == "easy" else enums.ButtonStyle.PRIMARY
         ),
         create_rich_button(
-            text="🟢 Medium" if difficulty == "medium" else "Medium",
+            text="🟢 Medium" if difficulty == "medium" else "⚪ Medium",
             callback_data="wpage|medium|1",
             style=enums.ButtonStyle.SUCCESS if difficulty == "medium" else enums.ButtonStyle.PRIMARY
         ),
         create_rich_button(
-            text="🟢 Hard" if difficulty == "hard" else "Hard",
+            text="🟢 Hard" if difficulty == "hard" else "⚪ Hard",
             callback_data="wpage|hard|1",
             style=enums.ButtonStyle.SUCCESS if difficulty == "hard" else enums.ButtonStyle.PRIMARY
         ),
     ]
 
-    # 3. Action Row (DANGER = Red)
+    # 3. Close Row (DANGER Red)
     close_row = [
         create_rich_button(
             text="❌ Close Panel", 
