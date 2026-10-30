@@ -7,6 +7,7 @@ from helpers import get_mention
 from utils.rich import send_jumble_rich
 
 START_BANNER_URL = "https://graph.org/file/ffb08ae20a8b09595d9ee-0798422a09215f7dc2.jpg"
+FALLBACK_BANNER_URL = "https://envs.sh/bIu.jpg"
 LOCAL_BANNER_PATH = "cache/start_banner.jpg"
 
 
@@ -15,20 +16,23 @@ def get_cached_banner():
         return LOCAL_BANNER_PATH
 
     os.makedirs("cache", exist_ok=True)
-    try:
-        req = urllib.request.Request(
-            START_BANNER_URL,
-            headers={
-                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-            }
-        )
-        with urllib.request.urlopen(req, timeout=10) as resp, open(LOCAL_BANNER_PATH, "wb") as f:
-            f.write(resp.read())
-
-        if os.path.isfile(LOCAL_BANNER_PATH) and os.path.getsize(LOCAL_BANNER_PATH) > 1000:
-            return LOCAL_BANNER_PATH
-    except Exception as e:
-        print(f"[Banner Download Error]: {e}")
+    urls = [START_BANNER_URL, FALLBACK_BANNER_URL]
+    for url in urls:
+        try:
+            req = urllib.request.Request(
+                url,
+                headers={
+                    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+                }
+            )
+            with urllib.request.urlopen(req, timeout=8) as resp:
+                data = resp.read()
+                if len(data) > 1000:
+                    with open(LOCAL_BANNER_PATH, "wb") as f:
+                        f.write(data)
+                    return LOCAL_BANNER_PATH
+        except Exception as e:
+            print(f"[Banner Download Error from {url}]: {e}")
 
     return None
 
@@ -78,14 +82,14 @@ async def dm_start_handler(client: Client, message: Message):
             ),
             types.RichMessageButton(
                 text="👤 My Stats",
-                style=enums.ButtonStyle.DANGER,  # Red Button Style
+                style=enums.ButtonStyle.DANGER,
                 callback_data="show_my_stats",
             ),
         ]
     ]
 
     banner_file = get_cached_banner()
-    await send_jumble_rich(client, message.chat.id, welcome_text, buttons, photo=banner_file)
+    await send_jumble_rich(client, message.chat.id, welcome_text, rich_buttons_rows=buttons, photo=banner_file)
 
 
 @Client.on_message(filters.command("help") & filters.private)
