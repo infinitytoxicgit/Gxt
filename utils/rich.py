@@ -4,22 +4,24 @@ import math
 from pyrogram import enums, types
 from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 
-def create_rich_button(text: str, callback_data: str = None, url: str = None):
+def create_rich_button(text: str, callback_data: str = None, url: str = None, style = None):
     btn_cls = getattr(types, "RichMessageButton", None) or getattr(types, "InputRichButton", None) or InlineKeyboardButton
     kwargs = {"text": text}
     if url:
         kwargs["url"] = url
     else:
         kwargs["callback_data"] = callback_data or "noop"
-        
-    if hasattr(enums, "ButtonStyle") and hasattr(enums.ButtonStyle, "DEFAULT"):
-        try:
-            return btn_cls(**kwargs, style=enums.ButtonStyle.DEFAULT)
-        except Exception:
-            pass
+
+    # Agar style pass hua hai toh wahi use hoga (SUCCESS, PRIMARY, DANGER)
+    if style is not None:
+        kwargs["style"] = style
+    elif hasattr(enums, "ButtonStyle") and hasattr(enums.ButtonStyle, "PRIMARY"):
+        kwargs["style"] = enums.ButtonStyle.PRIMARY
+
     try:
         return btn_cls(**kwargs)
     except Exception:
+        kwargs.pop("style", None)
         return InlineKeyboardButton(text=text, callback_data=callback_data or "noop", url=url)
 
 _TAG_RE = re.compile(r"<(/?)(b|i|u|a|code)(?:\s+(?:href)=([^>]+))?>", re.IGNORECASE)
@@ -69,7 +71,8 @@ def make_exp_slider_row(curr_exp: int, max_exp: int = 500):
     pct = (curr_exp / max_exp) * 100 if max_exp else 0
     bar = "─●────────" if pct <= 15 else "───●──────" if pct <= 40 else "─────●────" if pct <= 70 else "───────●──"
     txt = f"{curr_exp} EXP {bar} {max_exp} EXP"
-    btn = create_rich_button(text=txt, callback_data="noop")
+    style = getattr(enums.ButtonStyle, "PRIMARY", None)
+    btn = create_rich_button(text=txt, callback_data="noop", style=style)
     if hasattr(types, "InputRichBlockButtons"):
         return types.InputRichBlockButtons(buttons=[btn])
     return [btn]
@@ -87,7 +90,12 @@ def _to_rich_buttons(buttons_rows):
                 if isinstance(b, (InlineKeyboardButton, getattr(types, "RichMessageButton", type(None)))):
                     b_list.append(b)
                 elif hasattr(b, "text"):
-                    b_list.append(create_rich_button(text=b.text, callback_data=getattr(b, "callback_data", None), url=getattr(b, "url", None)))
+                    b_list.append(create_rich_button(
+                        text=b.text, 
+                        callback_data=getattr(b, "callback_data", None), 
+                        url=getattr(b, "url", None),
+                        style=getattr(b, "style", None)
+                    ))
             if b_list and hasattr(types, "InputRichBlockButtons"):
                 out.append(types.InputRichBlockButtons(buttons=b_list))
     return out
