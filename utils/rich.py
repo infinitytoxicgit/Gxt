@@ -1,4 +1,4 @@
-import os
+Import os
 import re
 import math
 from pyrogram import enums, types
@@ -12,6 +12,7 @@ def create_rich_button(text: str, callback_data: str = None, url: str = None, st
     else:
         kwargs["callback_data"] = callback_data or "noop"
 
+    # Agar style pass hua hai toh wahi use hoga (SUCCESS, PRIMARY, DANGER)
     if style is not None:
         kwargs["style"] = style
     elif hasattr(enums, "ButtonStyle") and hasattr(enums.ButtonStyle, "PRIMARY"):
@@ -126,22 +127,18 @@ def _to_inline(buttons_rows, slider=None):
 
 async def send_jumble_rich(client, chat_id: int, caption_html: str, rich_buttons_rows: list = None, slider_row=None, photo=None):
     blocks = []
-    has_photo = bool(photo)
+    has_photo = bool(photo and isinstance(photo, str) and os.path.isfile(photo))
 
-    # Kurigram Native Rich Photo handling
     if has_photo and hasattr(types, "InputRichBlockPhoto"):
         try:
-            # Agar local file path hai to Telegram par file upload karke pass karein
-            if isinstance(photo, str) and os.path.isfile(photo):
-                uploaded_photo = await client.save_file(photo)
-                blocks.append(types.InputRichBlockPhoto(photo=uploaded_photo))
-            elif isinstance(photo, str):
+            blocks.append(types.InputRichBlockPhoto(photo=types.InputMediaPhoto(media=photo)))
+        except Exception:
+            try:
                 blocks.append(types.InputRichBlockPhoto(photo=photo))
-        except Exception as pe:
-            print(f"[Photo Block Attach Error]: {pe}")
+            except Exception:
+                pass
 
     blocks.extend(html_to_rich_blocks(caption_html))
-    
     if slider_row:
         if hasattr(types, "InputRichBlockButtons") and isinstance(slider_row, types.InputRichBlockButtons):
             blocks.append(slider_row)
@@ -156,9 +153,8 @@ async def send_jumble_rich(client, chat_id: int, caption_html: str, rich_buttons
             rich_message=types.InputRichMessage(blocks=blocks)
         )
     except Exception as e:
-        print(f"[send_rich_message direct failed]: {e}")
+        print(f"[send_rich_message error]: {e}")
 
-    # Fallback to standard photo/message if rich fails
     markup = _to_inline(rich_buttons_rows, slider_row)
     if has_photo:
         return await client.send_photo(chat_id=chat_id, photo=photo, caption=caption_html, reply_markup=markup, parse_mode=enums.ParseMode.HTML)
@@ -170,3 +166,7 @@ async def edit_jumble_rich(client, chat_id: int, message_id: int, caption_html: 
     except Exception:
         pass
     return await send_jumble_rich(client, chat_id, caption_html, rich_buttons_rows, slider_row, photo)
+
+
+
+
