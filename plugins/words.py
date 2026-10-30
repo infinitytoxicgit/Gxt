@@ -94,7 +94,7 @@ def build_words_page(difficulty: str, page: int = 1):
         "➖ <b>Bulk Del :</b> <code>/delword [mode] word1 word2 word3</code></blockquote>"
     )
 
-    # 1. Navigation Row (Primary Blue / Neutral)
+    # 1. Navigation Row (PRIMARY = Blue)
     nav_row = []
     if page > 1:
         nav_row.append(create_rich_button(
@@ -103,10 +103,10 @@ def build_words_page(difficulty: str, page: int = 1):
             style=enums.ButtonStyle.PRIMARY
         ))
 
+    # Page indicator (No hardcoded secondary, uses safe default)
     nav_row.append(create_rich_button(
         text=f"📄 {page}/{total_pages}", 
-        callback_data="noop",
-        style=getattr(enums.ButtonStyle, "DEFAULT", enums.ButtonStyle.SECONDARY)
+        callback_data="noop"
     ))
 
     if page < total_pages:
@@ -116,7 +116,7 @@ def build_words_page(difficulty: str, page: int = 1):
             style=enums.ButtonStyle.PRIMARY
         ))
 
-    # 2. Difficulty Selector Tabs (Green for Active, Primary Blue for Inactive)
+    # 2. Difficulty Tabs (SUCCESS = Green for active, PRIMARY = Blue for inactive)
     tab_row = [
         create_rich_button(
             text="🟢 Easy" if difficulty == "easy" else "Easy",
@@ -135,7 +135,7 @@ def build_words_page(difficulty: str, page: int = 1):
         ),
     ]
 
-    # 3. Actions Row (Danger Red)
+    # 3. Action Row (DANGER = Red)
     close_row = [
         create_rich_button(
             text="❌ Close Panel", 
