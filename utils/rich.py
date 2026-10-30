@@ -4,6 +4,24 @@ import math
 from pyrogram import enums, types
 from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 
+def create_rich_button(text: str, callback_data: str = None, url: str = None):
+    btn_cls = getattr(types, "RichMessageButton", None) or getattr(types, "InputRichButton", None) or InlineKeyboardButton
+    kwargs = {"text": text}
+    if url:
+        kwargs["url"] = url
+    else:
+        kwargs["callback_data"] = callback_data or "noop"
+        
+    if hasattr(enums, "ButtonStyle") and hasattr(enums.ButtonStyle, "DEFAULT"):
+        try:
+            return btn_cls(**kwargs, style=enums.ButtonStyle.DEFAULT)
+        except Exception:
+            pass
+    try:
+        return btn_cls(**kwargs)
+    except Exception:
+        return InlineKeyboardButton(text=text, callback_data=callback_data or "noop", url=url)
+
 _TAG_RE = re.compile(r"<(/?)(b|i|u|a|code)(?:\s+(?:href)=([^>]+))?>", re.IGNORECASE)
 
 def _parse_inline(segment):
@@ -51,42 +69,50 @@ def make_exp_slider_row(curr_exp: int, max_exp: int = 500):
     pct = (curr_exp / max_exp) * 100 if max_exp else 0
     bar = "─●────────" if pct <= 15 else "───●──────" if pct <= 40 else "─────●────" if pct <= 70 else "───────●──"
     txt = f"{curr_exp} EXP {bar} {max_exp} EXP"
-    btn_style = getattr(enums.ButtonStyle, "DANGER", getattr(enums.ButtonStyle, "DEFAULT", None))
-    return types.InputRichBlockButtons(buttons=[types.RichMessageButton(text=txt, style=btn_style, callback_data="noop")])
+    btn = create_rich_button(text=txt, callback_data="noop")
+    if hasattr(types, "InputRichBlockButtons"):
+        return types.InputRichBlockButtons(buttons=[btn])
+    return [btn]
 
 def _to_rich_buttons(buttons_rows):
     out = []
     if not buttons_rows:
         return out
     for r in buttons_rows:
-        if isinstance(r, types.InputRichBlockButtons):
+        if hasattr(types, "InputRichBlockButtons") and isinstance(r, types.InputRichBlockButtons):
             out.append(r)
         elif isinstance(r, list):
             b_list = []
             for b in r:
-                if isinstance(b, types.RichMessageButton):
+                if isinstance(b, (InlineKeyboardButton, getattr(types, "RichMessageButton", type(None)))):
                     b_list.append(b)
-                elif isinstance(b, InlineKeyboardButton):
-                    b_list.append(types.RichMessageButton(text=b.text, style=enums.ButtonStyle.PRIMARY, callback_data=b.callback_data or "noop"))
-            if b_list:
+                elif hasattr(b, "text"):
+                    b_list.append(create_rich_button(text=b.text, callback_data=getattr(b, "callback_data", None), url=getattr(b, "url", None)))
+            if b_list and hasattr(types, "InputRichBlockButtons"):
                 out.append(types.InputRichBlockButtons(buttons=b_list))
     return out
 
 def _to_inline(buttons_rows, slider=None):
     rows = []
-    if slider and hasattr(slider, "buttons"):
-        rows.append([InlineKeyboardButton(b.text, callback_data="noop") for b in slider.buttons])
+    if slider:
+        if isinstance(slider, list):
+            rows.append(slider)
+        elif hasattr(slider, "buttons"):
+            rows.append([InlineKeyboardButton(b.text, callback_data=getattr(b, "callback_data", "noop")) for b in slider.buttons])
     if buttons_rows:
         for r in buttons_rows:
-            btn_list = r.buttons if isinstance(r, types.InputRichBlockButtons) else r
+            btn_list = r.buttons if hasattr(r, "buttons") else r
             if not isinstance(btn_list, list):
                 btn_list = [btn_list]
             row_b = []
             for b in btn_list:
-                if isinstance(b, InlineKeyboardButton):
-                    row_b.append(b)
+                t = getattr(b, "text", "Button")
+                cb = getattr(b, "callback_data", "noop")
+                u = getattr(b, "url", None)
+                if u:
+                    row_b.append(InlineKeyboardButton(text=t, url=u))
                 else:
-                    row_b.append(InlineKeyboardButton(text=b.text, callback_data=getattr(b, "callback_data", "noop")))
+                    row_b.append(InlineKeyboardButton(text=t, callback_data=cb or "noop"))
             if row_b:
                 rows.append(row_b)
     return InlineKeyboardMarkup(rows) if rows else None
@@ -95,19 +121,22 @@ async def send_jumble_rich(client, chat_id: int, caption_html: str, rich_buttons
     blocks = []
     has_photo = bool(photo and isinstance(photo, str) and os.path.isfile(photo))
 
-    # Kurigram Native Rich Photo handling (Pass exact file path string)
     if has_photo and hasattr(types, "InputRichBlockPhoto"):
         try:
             blocks.append(types.InputRichBlockPhoto(photo=types.InputMediaPhoto(media=photo)))
-        except Exception as e1:
+        except Exception:
             try:
                 blocks.append(types.InputRichBlockPhoto(photo=photo))
-            except Exception as e2:
-                print(f"[Photo Block Error]: {e1} | {e2}")
+            except Exception:
+                pass
 
     blocks.extend(html_to_rich_blocks(caption_html))
-    if slider_row and isinstance(slider_row, types.InputRichBlockButtons):
-        blocks.append(slider_row)
+    if slider_row:
+        if hasattr(types, "InputRichBlockButtons") and isinstance(slider_row, types.InputRichBlockButtons):
+            blocks.append(slider_row)
+        elif isinstance(slider_row, list) and hasattr(types, "InputRichBlockButtons"):
+            blocks.append(types.InputRichBlockButtons(buttons=slider_row))
+
     blocks.extend(_to_rich_buttons(rich_buttons_rows))
 
     try:
@@ -116,9 +145,8 @@ async def send_jumble_rich(client, chat_id: int, caption_html: str, rich_buttons
             rich_message=types.InputRichMessage(blocks=blocks)
         )
     except Exception as e:
-        print(f"[send_rich_message direct failed]: {e}")
+        print(f"[send_rich_message error]: {e}")
 
-    # Fallback to prevent silent drops
     markup = _to_inline(rich_buttons_rows, slider_row)
     if has_photo:
         return await client.send_photo(chat_id=chat_id, photo=photo, caption=caption_html, reply_markup=markup, parse_mode=enums.ParseMode.HTML)
