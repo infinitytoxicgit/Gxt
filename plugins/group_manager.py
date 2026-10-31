@@ -1,11 +1,12 @@
 import asyncio
 import time
-from pyrogram import Client, filters, enums
-from pyrogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
+from pyrogram import Client, filters, enums, types
+from pyrogram.types import Message, CallbackQuery
 from config import OWNER_ID
 from database import DB, get_settings
 from helpers import is_owner, is_authed
 from plugins.game_core import start_game
+from utils.rich import send_jumble_rich, edit_jumble_rich
 
 # ============================================================
 # DATA FETCHERS
@@ -41,12 +42,23 @@ def get_group_counts():
         act = DB.execute("SELECT COUNT(*) FROM settings WHERE chat_id < 0 AND is_active = 1").fetchone()
         inact = DB.execute("SELECT COUNT(*) FROM settings WHERE chat_id < 0 AND is_active = 0").fetchone()
         return (act[0] if act else 0), (inact[0] if inact else 0)
-    except Exception as e:
-        print(f"[Group Count Error]: {e}")
+    except Exception:
         return 0, 0
 
+def check_bulk_autodel_status(is_active_flag: int):
+    """Check karta hai ki majority groups mein auto_delete on hai ya off"""
+    try:
+        row = DB.execute("""
+            SELECT COUNT(*) FROM settings 
+            WHERE chat_id < 0 AND is_active = ? AND auto_delete = 1
+        """, (is_active_flag,)).fetchone()
+        on_count = row[0] if row else 0
+        return on_count > 0
+    except Exception:
+        return False
+
 # ============================================================
-# CHART & PANEL BUILDER
+# CHART & RICH PANEL BUILDER (WITH COLORS)
 # ============================================================
 
 def build_global_settings_view(view_mode: str = "inactive", page: int = 1):
@@ -93,43 +105,74 @@ def build_global_settings_view(view_mode: str = "inactive", page: int = 1):
 
     caption += (
         "<blockquote>⚡ <b>ONE-CLICK ACTION GUIDE :</b>\n"
-        "• <b>Auto-Start :</b> Selected category groups ko instantly start karega.\n"
-        "• <b>Stop All :</b> Selected category ke chalte games ko rok dega.\n"
-        "• <b>Auto-Del :</b> Bulk me auto-delete ON/OFF toggle karega.</blockquote>"
+        "• <b>Auto-Start / Stop :</b> Bulk action for this category.\n"
+        "• <b>Auto-Del Toggle :</b> Click button to switch ON/OFF for all groups.\n"
+        "• <b>Modes :</b> Change difficulty for this category.</blockquote>"
     )
 
-    # Category Switcher Buttons
-    switch_act_btn = InlineKeyboardButton(f"{'✅ ' if flag==1 else ''}🟢 Active ({active_count})", callback_data="mgr_switch_active_1")
-    switch_inact_btn = InlineKeyboardButton(f"{'✅ ' if flag==0 else ''}🔴 Inactive ({inactive_count})", callback_data="mgr_switch_inactive_1")
+    # Category Switcher Buttons with Colors
+    switch_act_btn = types.RichMessageButton(
+        text=f"{'✅ ' if flag==1 else ''}🟢 Active ({active_count})",
+        style=enums.ButtonStyle.SUCCESS if flag == 1 else enums.ButtonStyle.SECONDARY,
+        callback_data="mgr_switch_active_1"
+    )
+    switch_inact_btn = types.RichMessageButton(
+        text=f"{'✅ ' if flag==0 else ''}🔴 Inactive ({inactive_count})",
+        style=enums.ButtonStyle.DANGER if flag == 0 else enums.ButtonStyle.SECONDARY,
+        callback_data="mgr_switch_inactive_1"
+    )
 
-    # Mass Action Buttons
-    if flag == 0:
-        action_btn1 = InlineKeyboardButton(f"🚀 Start All ({total_items})", callback_data="mgr_action_start_all")
-        action_btn2 = InlineKeyboardButton("🗑️ Auto-Del ON (All)", callback_data="mgr_action_autodel_on")
+    # Dynamic Auto-Delete Toggle Button
+    is_any_del_on = check_bulk_autodel_status(flag)
+    if is_any_del_on:
+        del_btn_text = "🗑️ Auto-Del: Turn OFF"
+        del_btn_data = f"mgr_toggle_autodel_off_{view_mode}"
+        del_btn_style = enums.ButtonStyle.DANGER
     else:
-        action_btn1 = InlineKeyboardButton(f"⏹️ Stop All ({total_items})", callback_data="mgr_action_stop_all")
-        action_btn2 = InlineKeyboardButton("🗑️ Auto-Del OFF (All)", callback_data="mgr_action_autodel_off")
+        del_btn_text = "🗑️ Auto-Del: Turn ON"
+        del_btn_data = f"mgr_toggle_autodel_on_{view_mode}"
+        del_btn_style = enums.ButtonStyle.SUCCESS
 
-    kb = [
+    # Mass Action Launch / Stop Button
+    if flag == 0:
+        action_main_btn = types.RichMessageButton(
+            text=f"🚀 Start All ({total_items})",
+            style=enums.ButtonStyle.SUCCESS,
+            callback_data="mgr_action_start_all"
+        )
+    else:
+        action_main_btn = types.RichMessageButton(
+            text=f"⏹️ Stop All ({total_items})",
+            style=enums.ButtonStyle.DANGER,
+            callback_data="mgr_action_stop_all"
+        )
+
+    autodel_toggle_btn = types.RichMessageButton(
+        text=del_btn_text,
+        style=del_btn_style,
+        callback_data=del_btn_data
+    )
+
+    buttons = [
         [switch_inact_btn, switch_act_btn],
-        [action_btn1, action_btn2],
+        [action_main_btn, autodel_toggle_btn],
         [
-            InlineKeyboardButton("🎯 Easy All", callback_data=f"mgr_setmode_easy_{view_mode}"),
-            InlineKeyboardButton("🎯 Medium All", callback_data=f"mgr_setmode_medium_{view_mode}"),
-            InlineKeyboardButton("🎯 Hard All", callback_data=f"mgr_setmode_hard_{view_mode}")
+            types.RichMessageButton(text="🎯 Easy All", style=enums.ButtonStyle.PRIMARY, callback_data=f"mgr_setmode_easy_{view_mode}"),
+            types.RichMessageButton(text="🎯 Medium All", style=enums.ButtonStyle.PRIMARY, callback_data=f"mgr_setmode_medium_{view_mode}"),
+            types.RichMessageButton(text="🎯 Hard All", style=enums.ButtonStyle.PRIMARY, callback_data=f"mgr_setmode_hard_{view_mode}")
         ],
         [
-            InlineKeyboardButton("⬅️ Prev", callback_data=f"mgr_page_{view_mode}_{page - 1}"),
-            InlineKeyboardButton(f"📄 {page}/{total_pages}", callback_data="mgr_noop"),
-            InlineKeyboardButton("Next ➡️", callback_data=f"mgr_page_{view_mode}_{page + 1}")
+            types.RichMessageButton(text="⬅️ Prev", style=enums.ButtonStyle.SECONDARY, callback_data=f"mgr_page_{view_mode}_{page - 1}"),
+            types.RichMessageButton(text=f"📄 {page}/{total_pages}", style=enums.ButtonStyle.SECONDARY, callback_data="mgr_noop"),
+            types.RichMessageButton(text="Next ➡️", style=enums.ButtonStyle.SECONDARY, callback_data=f"mgr_page_{view_mode}_{page + 1}")
         ],
         [
-            InlineKeyboardButton("🔄 Refresh", callback_data=f"mgr_page_{view_mode}_{page}"),
-            InlineKeyboardButton("❌ Close", callback_data="mgr_close")
+            types.RichMessageButton(text="🔄 Refresh", style=enums.ButtonStyle.SUCCESS, callback_data=f"mgr_page_{view_mode}_{page}"),
+            types.RichMessageButton(text="❌ Close", style=enums.ButtonStyle.DANGER, callback_data="mgr_close")
         ]
     ]
 
-    return caption, InlineKeyboardMarkup(kb)
+    return caption, buttons
 
 # ============================================================
 # COMMAND HANDLER (HIGH PRIORITY GROUP=-2)
@@ -141,8 +184,6 @@ async def global_settings_cmd(client: Client, message: Message):
         return
 
     uid = message.from_user.id
-
-    # Check permission
     has_perm = (int(uid) == int(OWNER_ID)) or is_owner(uid) or is_authed(uid)
     if not has_perm:
         return await message.reply_text(
@@ -150,15 +191,14 @@ async def global_settings_cmd(client: Client, message: Message):
             parse_mode=enums.ParseMode.HTML
         )
 
-    # Argument check
     args = message.command[1:] if len(message.command) > 1 else []
     view_mode = "inactive"
     if args and "act" in args[0].lower() and "inact" not in args[0].lower():
         view_mode = "active"
 
     try:
-        caption, markup = build_global_settings_view(view_mode=view_mode, page=1)
-        await message.reply_text(caption, reply_markup=markup, parse_mode=enums.ParseMode.HTML)
+        caption, buttons = build_global_settings_view(view_mode=view_mode, page=1)
+        await send_jumble_rich(client, message.chat.id, caption, rich_buttons_rows=buttons)
     except Exception as e:
         print(f"[Group Manager Send Error]: {e}")
         await message.reply_text(f"❌ Error loading settings panel: <code>{e}</code>", parse_mode=enums.ParseMode.HTML)
@@ -189,9 +229,9 @@ async def global_settings_callback(client: Client, query: CallbackQuery):
     # Category Switch
     if data.startswith("mgr_switch_"):
         target_mode = data.split("_")[2]
-        caption, markup = build_global_settings_view(view_mode=target_mode, page=1)
+        caption, buttons = build_global_settings_view(view_mode=target_mode, page=1)
         try:
-            await query.message.edit_text(caption, reply_markup=markup, parse_mode=enums.ParseMode.HTML)
+            await edit_jumble_rich(client, query.message.chat.id, query.message.id, caption, rich_buttons_rows=buttons)
         except Exception:
             pass
         return await query.answer()
@@ -201,9 +241,9 @@ async def global_settings_callback(client: Client, query: CallbackQuery):
         parts = data.split("_")
         mode = parts[2]
         page_num = int(parts[3])
-        caption, markup = build_global_settings_view(view_mode=mode, page=page_num)
+        caption, buttons = build_global_settings_view(view_mode=mode, page=page_num)
         try:
-            await query.message.edit_text(caption, reply_markup=markup, parse_mode=enums.ParseMode.HTML)
+            await edit_jumble_rich(client, query.message.chat.id, query.message.id, caption, rich_buttons_rows=buttons)
         except Exception:
             pass
         return await query.answer()
@@ -219,33 +259,30 @@ async def global_settings_callback(client: Client, query: CallbackQuery):
         DB.commit()
         await query.answer(f"✅ Mode set to {diff.title()} for all {target_mode} groups!", show_alert=True)
         
-        caption, markup = build_global_settings_view(view_mode=target_mode, page=1)
+        caption, buttons = build_global_settings_view(view_mode=target_mode, page=1)
         try:
-            await query.message.edit_text(caption, reply_markup=markup, parse_mode=enums.ParseMode.HTML)
+            await edit_jumble_rich(client, query.message.chat.id, query.message.id, caption, rich_buttons_rows=buttons)
         except Exception:
             pass
         return
 
-    # Bulk Auto-Delete ON for Inactive
-    if data == "mgr_action_autodel_on":
-        DB.execute("UPDATE settings SET auto_delete = 1 WHERE chat_id < 0 AND is_active = 0")
-        DB.commit()
-        await query.answer("✅ Auto-Delete set to ON for all Inactive groups!", show_alert=True)
-        caption, markup = build_global_settings_view(view_mode="inactive", page=1)
-        try:
-            await query.message.edit_text(caption, reply_markup=markup, parse_mode=enums.ParseMode.HTML)
-        except Exception:
-            pass
-        return
+    # Dynamic Auto-Delete TOGGLE (Works for both Inactive and Active)
+    if data.startswith("mgr_toggle_autodel_"):
+        parts = data.split("_")
+        action = parts[3]     # on / off
+        target_mode = parts[4] # inactive / active
+        flag = 0 if target_mode == "inactive" else 1
+        new_val = 1 if action == "on" else 0
 
-    # Bulk Auto-Delete OFF for Active
-    if data == "mgr_action_autodel_off":
-        DB.execute("UPDATE settings SET auto_delete = 0 WHERE chat_id < 0 AND is_active = 1")
+        DB.execute("UPDATE settings SET auto_delete = ? WHERE chat_id < 0 AND is_active = ?", (new_val, flag))
         DB.commit()
-        await query.answer("✅ Auto-Delete turned OFF for all Active groups!", show_alert=True)
-        caption, markup = build_global_settings_view(view_mode="active", page=1)
+
+        status_str = "ON" if new_val == 1 else "OFF"
+        await query.answer(f"✅ Auto-Delete turned {status_str} for all {target_mode.title()} groups!", show_alert=True)
+
+        caption, buttons = build_global_settings_view(view_mode=target_mode, page=1)
         try:
-            await query.message.edit_text(caption, reply_markup=markup, parse_mode=enums.ParseMode.HTML)
+            await edit_jumble_rich(client, query.message.chat.id, query.message.id, caption, rich_buttons_rows=buttons)
         except Exception:
             pass
         return
@@ -255,9 +292,9 @@ async def global_settings_callback(client: Client, query: CallbackQuery):
         DB.execute("UPDATE settings SET is_active = 0 WHERE chat_id < 0 AND is_active = 1")
         DB.commit()
         await query.answer("⏹️ Stopped all active groups!", show_alert=True)
-        caption, markup = build_global_settings_view(view_mode="inactive", page=1)
+        caption, buttons = build_global_settings_view(view_mode="inactive", page=1)
         try:
-            await query.message.edit_text(caption, reply_markup=markup, parse_mode=enums.ParseMode.HTML)
+            await edit_jumble_rich(client, query.message.chat.id, query.message.id, caption, rich_buttons_rows=buttons)
         except Exception:
             pass
         return
@@ -270,7 +307,7 @@ async def global_settings_callback(client: Client, query: CallbackQuery):
 
         await query.answer("🚀 Starting all stopped groups in background...", show_alert=False)
 
-        DB.execute("UPDATE settings SET is_active = 1, auto_delete = 1 WHERE chat_id < 0 AND is_active = 0")
+        DB.execute("UPDATE settings SET is_active = 1 WHERE chat_id < 0 AND is_active = 0")
         DB.commit()
 
         asyncio.create_task(run_mass_starter(client, groups))
@@ -278,15 +315,14 @@ async def global_settings_callback(client: Client, query: CallbackQuery):
         await query.message.reply_text(
             f"<blockquote>🚀 <b>MASS START INITIATED!</b>\n\n"
             f"• <b>Groups Starting :</b> <code>{len(groups)}</code>\n"
-            f"• <b>Auto-Delete :</b> 🟢 <b>ON</b>\n"
             f"• <b>Active Groups :</b> 🟢 <b>Safe</b>\n\n"
             f"Puzzles are being dispatched (0.5s interval).</blockquote>",
             parse_mode=enums.ParseMode.HTML
         )
 
-        caption, markup = build_global_settings_view(view_mode="active", page=1)
+        caption, buttons = build_global_settings_view(view_mode="active", page=1)
         try:
-            await query.message.edit_text(caption, reply_markup=markup, parse_mode=enums.ParseMode.HTML)
+            await edit_jumble_rich(client, query.message.chat.id, query.message.id, caption, rich_buttons_rows=buttons)
         except Exception:
             pass
         return
