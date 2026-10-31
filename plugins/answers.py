@@ -25,7 +25,7 @@ def is_actual_game_guess(raw_text: str, target_word: str) -> bool:
 
     raw_text = raw_text.strip()
     parts = raw_text.split()
-    
+
     # Tag ya 1 se zyada words wale normal messages ko ignore karein
     if len(parts) != 1:
         return False
@@ -63,8 +63,8 @@ async def clear_round_guesses(client: Client, chat_id: int):
         print(f"[Clear Round Guesses Error in {chat_id}]: {e}")
 
 
-# GROUP=100 RAKHO TAUB COMMANDS (GROUP 0) PEHLE EXECUTE HO SAKEIN
-@Client.on_message(filters.text & filters.group, group=100)
+# FILTERS.GROUP | FILTERS.PRIVATE DONO ALLOW KIYE HAIN
+@Client.on_message(filters.text & (filters.group | filters.private), group=100)
 async def group_answer_handler(client: Client, message: Message):
     if not message.from_user or not message.text:
         message.continue_propagation()
@@ -84,6 +84,8 @@ async def group_answer_handler(client: Client, message: Message):
 
     chat_id = message.chat.id
     user_id = message.from_user.id
+    is_pm = message.chat.type == enums.ChatType.PRIVATE
+    
     cleaned_input = clean_answer(txt)
     if not cleaned_input:
         message.continue_propagation()
@@ -105,14 +107,15 @@ async def group_answer_handler(client: Client, message: Message):
     auto_del = bool(settings.get("auto_delete", 0))
 
     if cleaned_input == clean_answer(game["word"]):
-        # 1. Correct answer hamesha delete hoga (chahe auto_delete on ho ya off)
-        try:
-            await message.delete()
-        except Exception:
-            pass
+        # 1. Correct answer user ka delete karein (Group me delete hoga, DM me permission na ho to skip)
+        if not is_pm:
+            try:
+                await message.delete()
+            except Exception:
+                pass
 
-        # 2. Galat guesses sirf tab delete honge jab auto_delete ON hoga
-        if auto_del:
+        # 2. Galat guesses sirf tab delete honge jab auto_delete ON ho aur chat group ho
+        if auto_del and not is_pm:
             asyncio.create_task(clear_round_guesses(client, chat_id))
         else:
             GUESS_TRACKER.pop(chat_id, None)
@@ -197,8 +200,8 @@ async def group_answer_handler(client: Client, message: Message):
         except Exception:
             pass
 
-        # 3. Main puzzle photo sirf tab delete hogi jab auto_delete ON ho
-        if auto_del and game["message_id"]:
+        # 3. Main puzzle photo auto_delete ON hone par delete hogi (Group me unpin aur delete)
+        if auto_del and game["message_id"] and not is_pm:
             await safe_delete_and_unpin(client, chat_id, game["message_id"])
 
         u_mention = get_mention(message.from_user)
@@ -235,10 +238,10 @@ async def group_answer_handler(client: Client, message: Message):
             ]
         ]
 
-        # 4. Correct answer wala panel hamesha 4s popup hoke delete hoga
+        # 4. Correct answer wala panel
         try:
             c_msg = await send_jumble_rich(client, chat_id, ans_caption, buttons)
-            if c_msg:
+            if c_msg and not is_pm:
                 asyncio.create_task(delete_after(c_msg, 4))
         except Exception as se:
             print(f"[Win Card Error]: {se}")
@@ -251,7 +254,7 @@ async def group_answer_handler(client: Client, message: Message):
         except Exception as ge:
             print(f"[Spawn Next Error]: {ge}")
     else:
-        # Galat guess sirf tab store karein jab auto_delete ON ho
-        if auto_del and is_actual_game_guess(txt, game["word"]):
+        # Galat guess sirf tab store karein jab auto_delete ON ho aur group chat ho
+        if auto_del and not is_pm and is_actual_game_guess(txt, game["word"]):
             GUESS_TRACKER[chat_id].append(message.id)
         message.continue_propagation()
