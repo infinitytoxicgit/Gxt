@@ -10,11 +10,14 @@ from utils.rich import send_jumble_rich, edit_jumble_rich
 async def check_admin_safe(client: Client, chat_id: int, user_id: int) -> bool:
     if is_owner(user_id) or is_authed(user_id):
         return True
+    # Private chat (DM) me user khud hi admin/owner hai
+    if chat_id > 0:
+        return True
     try:
         member = await client.get_chat_member(chat_id, user_id)
         return member.status in (enums.ChatMemberStatus.OWNER, enums.ChatMemberStatus.ADMINISTRATOR)
     except Exception:
-        return True
+        return False
 
 
 def build_settings_card(chat_id: int, chat_title: str):
@@ -29,12 +32,16 @@ def build_settings_card(chat_id: int, chat_title: str):
     med_t = s.get("medium", 300)
     hard_t = s.get("hard", 600)
 
+    is_dm = chat_id > 0
+    header_title = "JUMBLE DM SETTINGS" if is_dm else "JUMBLE GROUP SETTINGS"
+    chat_type_label = "Private DM" if is_dm else "Group"
+
     st_text = "🟢 Running" if is_active else "🔴 Stopped"
     del_text = "🟢 Enabled" if auto_del else "🔴 Disabled"
 
     caption = (
-        "<blockquote>⚙️ <u><b>JUMBLE GROUP SETTINGS</b></u></blockquote>\n\n"
-        f"<blockquote>👥 <b>Group :</b> <code>{chat_title}</code>\n"
+        f"<blockquote>⚙️ <u><b>{header_title}</b></u></blockquote>\n\n"
+        f"<blockquote>👥 <b>{chat_type_label} :</b> <code>{chat_title}</code>\n"
         f"🆔 <b>Chat ID :</b> <code>{chat_id}</code></blockquote>\n\n"
         f"<blockquote>⚡ <b>Game Status :</b> {st_text}\n"
         f"🗑️ <b>Auto Delete :</b> {del_text}\n"
@@ -142,7 +149,6 @@ def build_timers_card(chat_id: int):
 
 
 async def update_settings_rich_view(client: Client, chat_id: int, message_id: int, caption: str, buttons: list):
-    """Guarantees Rich layout by cleanly replacing the message if inline fallback is threatened."""
     try:
         await edit_jumble_rich(client, chat_id, message_id, caption, buttons)
     except Exception:
@@ -153,17 +159,23 @@ async def update_settings_rich_view(client: Client, chat_id: int, message_id: in
         await send_jumble_rich(client, chat_id, caption, buttons)
 
 
-@Client.on_message(filters.command(["settings", "setting", "jumblesettings"], prefixes=["/", "!", "."]) & filters.group, group=-1)
+# FILTERS.GROUP HATAYA GAYA HAI TAUB DM MEIN BHI KAAM KARE
+@Client.on_message(filters.command(["settings", "setting", "jumblesettings"], prefixes=["/", "!", "."]), group=-1)
 async def settings_cmd(client: Client, message: Message):
     if not message.from_user:
         return
 
     chat_id = message.chat.id
-    is_admin = await check_admin_safe(client, chat_id, message.from_user.id)
-    if not is_admin:
-        return await message.reply_text("❌ Sirf Group Admins aur Owner settings access kar sakte hain.")
+    is_dm = message.chat.type in (enums.ChatType.PRIVATE,)
 
-    caption, buttons = build_settings_card(chat_id, message.chat.title or "Group")
+    # Agar group hai toh admin check hoga, DM hai toh allow rahega
+    if not is_dm:
+        is_admin = await check_admin_safe(client, chat_id, message.from_user.id)
+        if not is_admin:
+            return await message.reply_text("❌ Sirf Group Admins aur Owner settings access kar sakte hain.")
+
+    chat_title = (message.from_user.first_name or "Private DM") if is_dm else (message.chat.title or "Group")
+    caption, buttons = build_settings_card(chat_id, chat_title)
     try:
         await send_jumble_rich(client, chat_id, caption, buttons)
     except Exception as e:
@@ -175,10 +187,12 @@ async def settings_cmd(client: Client, message: Message):
 async def settings_callback_router(client: Client, query: CallbackQuery):
     user_id = query.from_user.id
     chat_id = query.message.chat.id
+    is_dm = chat_id > 0
 
-    is_admin = await check_admin_safe(client, chat_id, user_id)
-    if not is_admin:
-        return await query.answer("❌ Sirf group admins hi click kar sakte hain!", show_alert=True)
+    if not is_dm:
+        is_admin = await check_admin_safe(client, chat_id, user_id)
+        if not is_admin:
+            return await query.answer("❌ Sirf group admins hi click kar sakte hain!", show_alert=True)
 
     data = query.data.split("|")
     action = data[0]
@@ -187,6 +201,11 @@ async def settings_callback_router(client: Client, query: CallbackQuery):
         s = dict(get_settings(chat_id))
         new_val = 0 if s.get("is_active", 1) else 1
         DB.execute("UPDATE settings SET is_active=? WHERE chat_id=?", (new_val, chat_id))
+        
+        # Agar game STOP kiya hai toh current running game delete kar do taaki lagatar puzzle aana turant ruk jaye
+        if new_val == 0:
+            DB.execute("DELETE FROM games WHERE chat_id=?", (chat_id,))
+            
         DB.commit()
         await query.answer(f"Game Status: {'Running' if new_val else 'Stopped'}")
 
@@ -234,5 +253,6 @@ async def settings_callback_router(client: Client, query: CallbackQuery):
         await query.message.delete()
         return await query.answer("Closed!")
 
-    caption, buttons = build_settings_card(chat_id, query.message.chat.title or "Group")
+    chat_title = (query.from_user.first_name or "Private DM") if is_dm else (query.message.chat.title or "Group")
+    caption, buttons = build_settings_card(chat_id, chat_title)
     await update_settings_rich_view(client, chat_id, query.message.id, caption, buttons)
