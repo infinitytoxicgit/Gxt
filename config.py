@@ -9,7 +9,7 @@ BOT_TOKEN = os.getenv("BOT_TOKEN", "YOUR_BOT_TOKEN")
 OWNER_ID = int(os.getenv("OWNER_ID", "8564072723"))
 
 # Log Channel / Group ID
-LOG_CHANNEL = int(os.getenv("LOG_CHANNEL", "-1003515360437"))
+LOG_CHANNEL = int(os.getenv("LOG_CHANNEL", "-1004320603089"))
 
 START_IMG = "https://graph.org/file/7c0c03d68308f0c5dad42-ddb933df03f0ff0632.jpg"
 SUPPORT_GC = "https://t.me/Roohi_Soul_Gc"
