@@ -21,7 +21,8 @@ from pyrogram.errors import (
     ChatAdminRequired, 
     UserIsBlocked, 
     PeerIdInvalid,
-    InputUserDeactivated
+    InputUserDeactivated,
+    RPCError
 )
 from word_bank import choose_word, jumble_word
 from utils.rich import html_to_rich_blocks, send_jumble_rich
@@ -37,25 +38,41 @@ except ImportError:
         GUESS_TRACKER = None
 
 
-async def check_admin_safe(chat, user_id: int) -> bool:
+# ============================================================
+# BULLETPROOF ADMIN / OWNER PERMISSION CHECKER
+# ============================================================
+
+async def check_admin_safe(client: Client, chat_id: int, user_id: int) -> bool:
+    """Owner, Auth users, and verified Group Admins ko reliably verify karta hai."""
+    if not user_id:
+        return False
+
+    # 1. Direct Owner ya Auth User check
     if is_owner(user_id) or is_authed(user_id):
         return True
+
+    # 2. Helpers ka is_admin_or_owner check (both signatures handled)
     try:
-        res = await is_admin_or_owner(chat, user_id)
-        if res is not None:
-            return bool(res)
+        res = await is_admin_or_owner(chat_id, user_id)
+        if res:
+            return True
     except TypeError:
         try:
-            return bool(await is_admin_or_owner(chat.id, user_id))
+            chat_obj = await client.get_chat(chat_id)
+            res = await is_admin_or_owner(chat_obj, user_id)
+            if res:
+                return True
         except Exception:
             pass
     except Exception:
         pass
 
+    # 3. Direct Pyrogram Client call (Most Reliable)
     try:
-        member = await chat.get_member(user_id)
+        member = await client.get_chat_member(chat_id, user_id)
         return member.status in (enums.ChatMemberStatus.OWNER, enums.ChatMemberStatus.ADMINISTRATOR)
-    except Exception:
+    except Exception as e:
+        print(f"[Admin Check Error in {chat_id} for {user_id}]: {e}")
         return False
 
 
@@ -86,6 +103,9 @@ def rich_game_buttons(puzzle_id: int):
 async def disable_dead_chat(chat_id: int):
     try:
         DB.execute("UPDATE groups SET is_active = 0, enabled = 0 WHERE chat_id = ?", (chat_id,))
+    except Exception:
+        pass
+    try:
         DB.execute("UPDATE settings SET is_active = 0 WHERE chat_id = ?", (chat_id,))
         DB.execute("DELETE FROM games WHERE chat_id = ?", (chat_id,))
         DB.commit()
@@ -105,10 +125,11 @@ async def start_game(client: Client, chat_id: int, difficulty: str, message_or_c
     auto_del = bool(settings.get("auto_delete", 0))
 
     old_game = DB.execute("SELECT message_id FROM games WHERE chat_id=?", (chat_id,)).fetchone()
-    if old_game and auto_del and old_game["message_id"]:
+    if old_game and auto_del and old_game["message_id"] and chat_id < 0:
         await safe_delete_and_unpin(client, chat_id, old_game["message_id"])
 
     DB.execute("DELETE FROM games WHERE chat_id=?", (chat_id,))
+    DB.commit()
 
     # Naye puzzle round se pehle guess list reset
     if GUESS_TRACKER is not None:
@@ -184,8 +205,7 @@ async def expire_game(client: Client, chat_id: int, puzzle_id: int, expires: flo
     s = dict(raw_s) if raw_s else {}
     auto_del = bool(s.get("auto_delete", 0))
 
-    # Auto Delete ON hone par hi wrong answers delete honge
-    if auto_del and clear_round_guesses:
+    if auto_del and clear_round_guesses and chat_id < 0:
         asyncio.create_task(clear_round_guesses(client, chat_id))
     elif GUESS_TRACKER is not None:
         GUESS_TRACKER.pop(chat_id, None)
@@ -201,7 +221,7 @@ async def expire_game(client: Client, chat_id: int, puzzle_id: int, expires: flo
             f"🔄 <i>Next puzzle starting in 1 second...</i></blockquote>"
         )
         exp_msg = await send_jumble_rich(client, chat_id, expire_caption)
-        if auto_del and exp_msg:
+        if auto_del and exp_msg and chat_id < 0:
             asyncio.create_task(delete_after(exp_msg, 4))
     except (ChannelInvalid, ChannelPrivate, PeerIdInvalid, UserIsBlocked):
         await disable_dead_chat(chat_id)
@@ -228,7 +248,7 @@ async def start_game_cmd(client: Client, message: Message):
     user_id = message.from_user.id if message.from_user else 0
 
     if message.chat.type != enums.ChatType.PRIVATE:
-        if not await check_admin_safe(message.chat, user_id):
+        if not await check_admin_safe(client, chat_id, user_id):
             return await message.reply_text("❌ Sirf Group Admins/Owner hi Jumble game activate kar sakte hain.")
 
     if chat_id in ACTIVE_FIGHTS:
@@ -300,7 +320,7 @@ async def skip_cmd(client: Client, message: Message):
     user_id = message.from_user.id if message.from_user else 0
 
     if message.chat.type != enums.ChatType.PRIVATE:
-        if not await check_admin_safe(message.chat, user_id):
+        if not await check_admin_safe(client, chat_id, user_id):
             return await message.reply_text("❌ Sirf Group Admins hi puzzle skip kar sakte hain.")
 
     game = DB.execute("SELECT * FROM games WHERE chat_id=? AND solved=0", (chat_id,)).fetchone()
@@ -314,7 +334,7 @@ async def skip_cmd(client: Client, message: Message):
     s = dict(raw_s) if raw_s else {}
     auto_del = bool(s.get("auto_delete", 0))
 
-    if auto_del and clear_round_guesses:
+    if auto_del and clear_round_guesses and chat_id < 0:
         asyncio.create_task(clear_round_guesses(client, chat_id))
     elif GUESS_TRACKER is not None:
         GUESS_TRACKER.pop(chat_id, None)
@@ -328,7 +348,7 @@ async def skip_cmd(client: Client, message: Message):
         f"🔄 <i>Next puzzle starting in 1 second...</i></blockquote>"
     )
     msg = await send_jumble_rich(client, chat_id, skip_caption)
-    if auto_del and msg:
+    if auto_del and msg and chat_id < 0:
         asyncio.create_task(delete_after(msg, 4))
 
     await asyncio.sleep(1)
@@ -347,7 +367,7 @@ async def end_game_cmd(client: Client, message: Message):
     user_id = message.from_user.id if message.from_user else 0
 
     if message.chat.type != enums.ChatType.PRIVATE:
-        if not await check_admin_safe(message.chat, user_id):
+        if not await check_admin_safe(client, chat_id, user_id):
             return await message.reply_text("❌ Sirf Group Admins hi game end kar sakte hain.")
 
     DB.execute("UPDATE settings SET is_active=0 WHERE chat_id=?", (chat_id,))
@@ -359,7 +379,7 @@ async def end_game_cmd(client: Client, message: Message):
     s = dict(raw_s) if raw_s else {}
     auto_del = bool(s.get("auto_delete", 0))
 
-    if auto_del and clear_round_guesses:
+    if auto_del and clear_round_guesses and chat_id < 0:
         asyncio.create_task(clear_round_guesses(client, chat_id))
 
     if auto_del and game and game["message_id"] and chat_id < 0:
@@ -419,7 +439,7 @@ async def puzzle_buttons_listener(client: Client, query: CallbackQuery):
 
     elif action in ["game_skip", "skip"]:
         if query.message.chat.type != enums.ChatType.PRIVATE:
-            is_adm = await check_admin_safe(query.message.chat, user_id)
+            is_adm = await check_admin_safe(client, chat_id, user_id)
             if not is_adm:
                 return await query.answer("❌ Sirf Group Admins hi puzzle skip kar sakte hain!", show_alert=True)
 
@@ -437,7 +457,7 @@ async def puzzle_buttons_listener(client: Client, query: CallbackQuery):
         s = dict(raw_s) if raw_s else {}
         auto_del = bool(s.get("auto_delete", 0))
 
-        if auto_del and clear_round_guesses:
+        if auto_del and clear_round_guesses and chat_id < 0:
             asyncio.create_task(clear_round_guesses(client, chat_id))
         elif GUESS_TRACKER is not None:
             GUESS_TRACKER.pop(chat_id, None)
@@ -453,7 +473,7 @@ async def puzzle_buttons_listener(client: Client, query: CallbackQuery):
             f"🔄 <i>Next puzzle starting in 1 second...</i></blockquote>"
         )
         msg = await send_jumble_rich(client, chat_id, skip_caption)
-        if auto_del and msg:
+        if auto_del and msg and chat_id < 0:
             asyncio.create_task(delete_after(msg, 4))
 
         await asyncio.sleep(1)
