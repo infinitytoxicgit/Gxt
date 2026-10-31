@@ -20,8 +20,20 @@ def get_groups_by_status(is_active_flag: int):
             WHERE chat_id < 0 AND is_active = ?
             ORDER BY chat_id ASC
         """, (is_active_flag,)).fetchall()
-        return [dict(r) for r in rows]
-    except Exception:
+        
+        result = []
+        for r in rows:
+            if hasattr(r, "keys"):
+                result.append(dict(r))
+            else:
+                result.append({
+                    "chat_id": r[0],
+                    "default_diff": r[1] if len(r) > 1 else "medium",
+                    "auto_delete": r[2] if len(r) > 2 else 0
+                })
+        return result
+    except Exception as e:
+        print(f"[Group Manager Fetch Error]: {e}")
         return []
 
 def get_group_counts():
@@ -29,7 +41,8 @@ def get_group_counts():
         act = DB.execute("SELECT COUNT(*) FROM settings WHERE chat_id < 0 AND is_active = 1").fetchone()
         inact = DB.execute("SELECT COUNT(*) FROM settings WHERE chat_id < 0 AND is_active = 0").fetchone()
         return (act[0] if act else 0), (inact[0] if inact else 0)
-    except Exception:
+    except Exception as e:
+        print(f"[Group Count Error]: {e}")
         return 0, 0
 
 # ============================================================
@@ -119,29 +132,36 @@ def build_global_settings_view(view_mode: str = "inactive", page: int = 1):
     return caption, InlineKeyboardMarkup(kb)
 
 # ============================================================
-# COMMAND HANDLER: /setglobalsettings & /inactivegroups
+# COMMAND HANDLER (HIGH PRIORITY GROUP=-2)
 # ============================================================
 
-@Client.on_message(filters.command(["setglobalsettings", "globalsettings", "inactivegroups", "idlegroups"], prefixes=["/", "!", "."]))
+@Client.on_message(filters.command(["setglobalsettings", "globalsettings", "inactivegroups", "idlegroups"], prefixes=["/", "!", "."]), group=-2)
 async def global_settings_cmd(client: Client, message: Message):
     if not message.from_user:
         return
 
     uid = message.from_user.id
-    if int(uid) != int(OWNER_ID) and not is_owner(uid) and not is_authed(uid):
+
+    # Check permission
+    has_perm = (int(uid) == int(OWNER_ID)) or is_owner(uid) or is_authed(uid)
+    if not has_perm:
         return await message.reply_text(
-            "<blockquote>❌ <b>Access Denied :</b> Only Owner & Authorized Admins can open Global Group Settings.</blockquote>",
+            "<blockquote>❌ <b>Access Denied :</b> Only Owner & Authorized Staff can open Global Group Settings.</blockquote>",
             parse_mode=enums.ParseMode.HTML
         )
 
-    # Check argument: /setglobalsettings active  ya  /setglobalsettings inactive
+    # Argument check
     args = message.command[1:] if len(message.command) > 1 else []
     view_mode = "inactive"
     if args and "act" in args[0].lower() and "inact" not in args[0].lower():
         view_mode = "active"
 
-    caption, markup = build_global_settings_view(view_mode=view_mode, page=1)
-    await message.reply_text(caption, reply_markup=markup, parse_mode=enums.ParseMode.HTML)
+    try:
+        caption, markup = build_global_settings_view(view_mode=view_mode, page=1)
+        await message.reply_text(caption, reply_markup=markup, parse_mode=enums.ParseMode.HTML)
+    except Exception as e:
+        print(f"[Group Manager Send Error]: {e}")
+        await message.reply_text(f"❌ Error loading settings panel: <code>{e}</code>", parse_mode=enums.ParseMode.HTML)
 
 # ============================================================
 # CALLBACK ROUTER
@@ -150,7 +170,8 @@ async def global_settings_cmd(client: Client, message: Message):
 @Client.on_callback_query(filters.regex(r"^mgr_"))
 async def global_settings_callback(client: Client, query: CallbackQuery):
     uid = query.from_user.id
-    if int(uid) != int(OWNER_ID) and not is_owner(uid) and not is_authed(uid):
+    has_perm = (int(uid) == int(OWNER_ID)) or is_owner(uid) or is_authed(uid)
+    if not has_perm:
         return await query.answer("❌ You are not authorized!", show_alert=True)
 
     data = query.data
