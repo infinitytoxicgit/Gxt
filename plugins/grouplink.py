@@ -1,5 +1,5 @@
 from pyrogram import Client, filters, enums
-from pyrogram.types import Message
+from pyrogram.types import Message, LinkPreviewOptions
 from config import OWNER_ID
 from helpers import is_owner, is_authed
 
@@ -58,7 +58,7 @@ async def generate_group_link_cmd(client: Client, message: Message):
         # 1. Public Username link
         if chat.username:
             invite_link = f"https://t.me/{chat.username}"
-        
+
         # 2. Primary existing invite link
         elif chat.invite_link:
             invite_link = chat.invite_link
@@ -83,7 +83,12 @@ async def generate_group_link_cmd(client: Client, message: Message):
             f"🌐 <b>Invite URL :</b>\n👉 {invite_link}"
         )
 
-        await status_msg.edit_text(response_text, parse_mode=enums.ParseMode.HTML, disable_web_page_preview=True)
+        # Pyrogram v2+ support: link_preview_options se preview disable kiya gaya hai
+        await status_msg.edit_text(
+            response_text,
+            parse_mode=enums.ParseMode.HTML,
+            link_preview_options=LinkPreviewOptions(is_disabled=True)
+        )
 
     except Exception as e:
         await status_msg.edit_text(
