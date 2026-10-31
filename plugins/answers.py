@@ -1,5 +1,6 @@
 import asyncio
 import time
+from collections import defaultdict, Counter
 from database import DB, get_settings, get_global_config, ensure_user, get_user
 from helpers import (
     clean_answer, 
@@ -14,6 +15,48 @@ from pyrogram import Client, filters, enums, types
 from pyrogram.types import Message
 from utils.rich import send_jumble_rich
 
+# Round ke dauran aane wale galat guesses ko track karne ke liye
+GUESS_TRACKER = defaultdict(list)
+
+# Check karega ki kya message sach me jumble word ka guess hai ya random chat/tag
+def is_actual_game_guess(raw_text: str, target_word: str) -> bool:
+    if not raw_text or not target_word:
+        return False
+
+    raw_text = raw_text.strip()
+    parts = raw_text.split()
+    # Tag ya multiple words ko delete nahi karna
+    if len(parts) != 1:
+        return False
+
+    word_input = clean_answer(parts[0])
+    target = clean_answer(target_word)
+
+    if len(word_input) != len(target):
+        return False
+
+    if Counter(word_input) == Counter(target):
+        return True
+
+    common_chars = sum((Counter(word_input) & Counter(target)).values())
+    if common_chars >= max(3, len(target) - 1):
+        return True
+
+    return False
+
+# Round khatam hone par galat attempts ko ek saath 100-100 ke batch me delete karega
+async def clear_round_guesses(client: Client, chat_id: int):
+    msg_ids = GUESS_TRACKER.pop(chat_id, [])
+    if not msg_ids:
+        return
+    try:
+        for i in range(0, len(msg_ids), 100):
+            batch = msg_ids[i:i + 100]
+            await client.delete_messages(chat_id, batch)
+    except Exception:
+        pass
+
+
 # GROUP=100 RAKHO TAUB COMMANDS (GROUP 0) PEHLE EXECUTE HO SAKEIN
 @Client.on_message(filters.text & filters.group, group=100)
 async def group_answer_handler(client: Client, message: Message):
@@ -25,6 +68,11 @@ async def group_answer_handler(client: Client, message: Message):
 
     # AGAR COMMAND HAI TOH PROPAGATE KARKE NIKLO
     if txt.startswith(("/", "!", ".")):
+        message.continue_propagation()
+        return
+
+    # Tagging ya links ko game guess mat samjho
+    if "@" in txt or "http://" in txt or "https://" in txt or "t.me/" in txt:
         message.continue_propagation()
         return
 
@@ -46,7 +94,24 @@ async def group_answer_handler(client: Client, message: Message):
         message.continue_propagation()
         return
 
+    raw_settings = get_settings(chat_id)
+    settings = dict(raw_settings) if raw_settings else {}
+    auto_del = bool(settings.get("auto_delete", 0))
+
     if cleaned_input == clean_answer(game["word"]):
+        # Agar auto_delete on hai toh user ka correct message instant delete karo
+        if auto_del:
+            try:
+                await message.delete()
+            except Exception:
+                pass
+
+        # Round ke dauran jitne bhi galat answers aaye the unko clear karo
+        if auto_del:
+            asyncio.create_task(clear_round_guesses(client, chat_id))
+        else:
+            GUESS_TRACKER.pop(chat_id, None)
+
         updated = DB.execute("UPDATE games SET solved=1 WHERE chat_id=? AND solved=0", (chat_id,))
         if updated.rowcount != 1:
             message.continue_propagation()
@@ -56,9 +121,6 @@ async def group_answer_handler(client: Client, message: Message):
         ensure_user(message.from_user)
         u = get_user(user_id)
         u_dict = dict(u) if u else {}
-
-        raw_settings = get_settings(chat_id)
-        settings = dict(raw_settings) if raw_settings else {}
 
         diff = str(game["difficulty"]).lower()
 
@@ -130,7 +192,7 @@ async def group_answer_handler(client: Client, message: Message):
         except Exception:
             pass
 
-        if settings.get("auto_delete") and game["message_id"]:
+        if auto_del and game["message_id"]:
             await safe_delete_and_unpin(client, chat_id, game["message_id"])
 
         u_mention = get_mention(message.from_user)
@@ -169,7 +231,7 @@ async def group_answer_handler(client: Client, message: Message):
 
         try:
             c_msg = await send_jumble_rich(client, chat_id, ans_caption, buttons)
-            if settings.get("auto_delete") and c_msg:
+            if auto_del and c_msg:
                 asyncio.create_task(delete_after(c_msg, 4))
         except Exception as se:
             print(f"[Win Card Error]: {se}")
@@ -182,4 +244,7 @@ async def group_answer_handler(client: Client, message: Message):
         except Exception as ge:
             print(f"[Spawn Next Error]: {ge}")
     else:
+        # Agar answer match nahi hua par target word se related galat guess hai toh track karo
+        if auto_del and is_actual_game_guess(txt, game["word"]):
+            GUESS_TRACKER[chat_id].append(message.id)
         message.continue_propagation()
