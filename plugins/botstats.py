@@ -26,7 +26,7 @@ def format_duration(seconds: float) -> str:
     if mins > 0:
         parts.append(f"{mins}m")
     parts.append(f"{sec}s")
-    return " ".join(parts)
+    return " ".join(parts) if parts else "0s"
 
 
 def format_num(val) -> str:
@@ -47,11 +47,13 @@ def fetch_bot_deep_analytics():
     total_users = 0
     total_points = 0
     private_tag_users = 0
+    total_solved = 0
     try:
-        row = DB.execute("SELECT COUNT(*), COALESCE(SUM(points), 0), COALESCE(SUM(stars), 0) FROM users").fetchone()
+        row = DB.execute("SELECT COUNT(*), COALESCE(SUM(points), 0), COALESCE(SUM(solved), 0) FROM users").fetchone()
         if row:
-            total_users = row[0]
-            total_points = (row[1] or 0) + (row[2] or 0)
+            total_users = row[0] or 0
+            total_points = row[1] or 0
+            total_solved = row[2] or 0
     except Exception:
         pass
 
@@ -61,33 +63,47 @@ def fetch_bot_deep_analytics():
     except Exception:
         pass
 
-    # 3. Configured Groups Analytics
+    # 3. Configured Groups & Real Active Logic (settings & games tables)
     total_groups = 0
     active_groups = 0
-    try:
-        g_row = DB.execute("SELECT COUNT(*) FROM groups").fetchone()
-        total_groups = g_row[0] if g_row else 0
-    except Exception:
-        pass
+    live_puzzles = 0
 
-    try:
-        # Check active games or enabled groups
-        ag_row = DB.execute("SELECT COUNT(*) FROM groups WHERE is_active = 1 OR enabled = 1").fetchone()
-        active_groups = ag_row[0] if ag_row else 0
-    except Exception:
-        active_groups = max(0, total_groups // 3)
+    # Total groups count from settings table
+    for g_table in ("settings", "groups", "chats"):
+        try:
+            g_row = DB.execute(f"SELECT COUNT(*) FROM {g_table} WHERE chat_id < 0").fetchone()
+            if g_row and g_row[0] is not None and g_row[0] > 0:
+                total_groups = g_row[0]
+                break
+        except Exception:
+            continue
 
+    # Groups where bot game loop is enabled (is_active = 1)
+    for s_table in ("settings", "groups", "chat_settings"):
+        try:
+            ag_row = DB.execute(f"SELECT COUNT(*) FROM {s_table} WHERE is_active = 1 AND chat_id < 0").fetchone()
+            if ag_row and ag_row[0] is not None:
+                active_groups = ag_row[0]
+                break
+        except Exception:
+            continue
+
+    # Real-time ongoing live puzzles right now
+    now_ts = time.time()
+    for live_table in ("games", "active_games", "live_games"):
+        try:
+            lg_row = DB.execute(f"SELECT COUNT(DISTINCT chat_id) FROM {live_table} WHERE solved = 0 AND expires > ?", (now_ts,)).fetchone()
+            if lg_row and lg_row[0] is not None:
+                live_puzzles = lg_row[0]
+                break
+        except Exception:
+            pass
+
+    # Safety bounds
+    total_groups = max(total_groups, active_groups)
     inactive_groups = max(0, total_groups - active_groups)
 
-    # 4. Solved Puzzles & Gameplay Stats
-    total_solved = 0
-    try:
-        s_row = DB.execute("SELECT COALESCE(SUM(correct), 0) FROM users").fetchone()
-        total_solved = s_row[0] if s_row else 0
-    except Exception:
-        pass
-
-    # 5. Word Bank Database
+    # 4. Word Bank Database
     easy_builtin = len(WORDS.get("easy", []))
     med_builtin = len(WORDS.get("medium", []))
     hard_builtin = len(WORDS.get("hard", []))
@@ -102,30 +118,38 @@ def fetch_bot_deep_analytics():
 
     total_active_words = builtin_total + custom_words_count
 
-    # 6. Active 1v1 Fights
-    active_fights = 0
+    # 5. Active Fights & Bet Battles
+    total_fights_played = 0
+    total_bets_played = 0
     try:
-        f_row = DB.execute("SELECT COUNT(*) FROM fights WHERE status = 'active' OR is_active = 1").fetchone()
-        active_fights = f_row[0] if f_row else 0
+        f_row = DB.execute("SELECT COALESCE(SUM(fight_wins + fight_losses), 0), COALESCE(SUM(bet_wins + bet_losses), 0) FROM users").fetchone()
+        if f_row:
+            total_fights_played = (f_row[0] or 0) // 2
+            total_bets_played = (f_row[1] or 0) // 2
     except Exception:
         pass
 
-    # 7. Active Shop Boosters
+    # 6. Active Shop Boosters
     active_boosters = 0
     try:
-        now_ts = time.time()
-        b_row = DB.execute("SELECT COUNT(*) FROM user_powers WHERE expires_at > ?", (now_ts,)).fetchone()
+        b_row = DB.execute("SELECT COUNT(*) FROM users WHERE point_card_exp > ? OR level_card_exp > ?", (now_ts, now_ts)).fetchone()
         active_boosters = b_row[0] if b_row else 0
     except Exception:
         pass
 
-    # 8. Authorized Admins & Staff
+    # 7. Authorized Staff Count
     authed_admins_count = 0
     try:
-        a_row = DB.execute("SELECT COUNT(*) FROM authed_users").fetchone()
-        authed_admins_count = a_row[0] if a_row else 0
+        for a_table in ("auth_users", "authed_users"):
+            try:
+                a_row = DB.execute(f"SELECT COUNT(*) FROM {a_table}").fetchone()
+                if a_row and a_row[0] is not None:
+                    authed_admins_count = a_row[0]
+                    break
+            except Exception:
+                continue
     except Exception:
-        authed_admins_count = 1
+        authed_admins_count = 0
 
     return {
         "uptime": uptime_str,
@@ -137,13 +161,15 @@ def fetch_bot_deep_analytics():
         "total_groups": total_groups,
         "active_groups": active_groups,
         "inactive_groups": inactive_groups,
+        "live_puzzles": live_puzzles,
         "total_solved": total_solved,
         "easy_builtin": easy_builtin,
         "med_builtin": med_builtin,
         "hard_builtin": hard_builtin,
         "custom_words": custom_words_count,
         "total_words": total_active_words,
-        "active_fights": active_fights,
+        "total_fights": total_fights_played,
+        "total_bets": total_bets_played,
         "active_boosters": active_boosters,
         "authed_count": authed_admins_count,
     }
@@ -165,12 +191,14 @@ def build_botstats_view():
         f"• <b>Stealth/Private Profiles :</b> <code>{format_num(data['private_tag_users'])}</code>\n"
         f"• <b>Total Configured Groups :</b> <code>{format_num(data['total_groups'])}</code>\n"
         f"  ├ 🟢 <b>Active Playing :</b> <code>{format_num(data['active_groups'])}</code>\n"
+        f"  ├ ⚡ <b>Ongoing Puzzles Right Now :</b> <code>{format_num(data['live_puzzles'])}</code>\n"
         f"  └ 🔴 <b>Stopped / Idling :</b> <code>{format_num(data['inactive_groups'])}</code></blockquote>\n\n"
         "<blockquote>💰 <b>ECONOMY & ACTIVE BUFFS :</b>\n"
-        f"• <b>Points / Stars in Circulation :</b> <code>{format_num(data['total_points'])} pts</code>\n"
-        f"• <b>Active Shop Power Boosters :</b> <code>{format_num(data['active_boosters'])} live</code>\n"
+        f"• <b>Stars in Circulation :</b> <code>{format_num(data['total_points'])} pts</code>\n"
+        f"• <b>Active Shop Card Boosters :</b> <code>{format_num(data['active_boosters'])} players</code>\n"
         f"• <b>All-Time Puzzles Solved :</b> <code>{format_num(data['total_solved'])}</code>\n"
-        f"• <b>Active 1v1 Fights Right Now :</b> <code>{format_num(data['active_fights'])}</code></blockquote>\n\n"
+        f"• <b>1v1 Normal Fights Played :</b> <code>{format_num(data['total_fights'])}</code>\n"
+        f"• <b>1v1 Bet Matches Played :</b> <code>{format_num(data['total_bets'])}</code></blockquote>\n\n"
         "<blockquote>📚 <b>WORD BANK REPOSITORY :</b>\n"
         f"  ├ 🟢 <b>Easy Built-in :</b> <code>{format_num(data['easy_builtin'])}</code>\n"
         f"  ├ 🟡 <b>Medium Built-in :</b> <code>{format_num(data['med_builtin'])}</code>\n"
@@ -178,7 +206,7 @@ def build_botstats_view():
         f"  ├ ➕ <b>Custom Added Words :</b> <code>{format_num(data['custom_words'])}</code>\n"
         f"  └ 💎 <b>Total Active Words Bank :</b> <code>{format_num(data['total_words'])}</code></blockquote>\n\n"
         "<blockquote>🔐 <b>SECURITY & PRIVILEGE MATRIX :</b>\n"
-        f"• <b>Authorized Admins :</b> <code>{data['authed_count']}</code>\n"
+        f"• <b>Authorized Staff :</b> <code>{data['authed_count']}</code>\n"
         f"• <b>Root Owner ID :</b> <code>{OWNER_ID}</code></blockquote>"
     )
 
@@ -210,9 +238,11 @@ async def bot_stats_cmd(client: Client, message: Message):
         return
 
     uid = message.from_user.id
-    # Permission verification
     if int(uid) != int(OWNER_ID) and not is_owner(uid) and not is_authed(uid):
-        return await message.reply_text("<blockquote>❌ <b>Access Denied :</b> Only Owner & Authorized Staff can view Bot Deep Analytics.</blockquote>", parse_mode=enums.ParseMode.HTML)
+        return await message.reply_text(
+            "<blockquote>❌ <b>Access Denied :</b> Only Owner & Authorized Staff can view Bot Deep Analytics.</blockquote>",
+            parse_mode=enums.ParseMode.HTML
+        )
 
     caption, buttons = build_botstats_view()
     await send_jumble_rich(client, message.chat.id, caption, rich_buttons_rows=buttons)
