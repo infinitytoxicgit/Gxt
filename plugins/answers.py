@@ -18,33 +18,39 @@ from utils.rich import send_jumble_rich
 # Round ke dauran aane wale galat guesses ko track karne ke liye
 GUESS_TRACKER = defaultdict(list)
 
-# Check karega ki kya message sach me jumble word ka guess hai ya random chat/tag
+# Check karega ki kya message game ka guess hai ya random chat/tag
 def is_actual_game_guess(raw_text: str, target_word: str) -> bool:
     if not raw_text or not target_word:
         return False
 
     raw_text = raw_text.strip()
     parts = raw_text.split()
-    # Tag ya multiple words ko delete nahi karna
+    
+    # Tag ya 1 se zyada words wale normal messages ko ignore karein
     if len(parts) != 1:
         return False
 
     word_input = clean_answer(parts[0])
     target = clean_answer(target_word)
 
-    if len(word_input) != len(target):
+    if not word_input or not target:
         return False
 
+    # 1. Anagram match (letters wahi hain par ulte-seedhe likhe hain)
     if Counter(word_input) == Counter(target):
         return True
 
-    common_chars = sum((Counter(word_input) & Counter(target)).values())
-    if common_chars >= max(3, len(target) - 1):
-        return True
+    # 2. Length difference max 2 letters tak allow karein (typos ke liye)
+    len_diff = abs(len(word_input) - len(target))
+    if len_diff <= 2:
+        common_chars = sum((Counter(word_input) & Counter(target)).values())
+        # Target letters ka major portion match ho raha ho
+        if common_chars >= max(2, len(target) // 2):
+            return True
 
     return False
 
-# Round khatam hone par galat attempts ko ek saath 100-100 ke batch me delete karega
+# Round khatam hone par galat attempts ko batch me delete karega
 async def clear_round_guesses(client: Client, chat_id: int):
     msg_ids = GUESS_TRACKER.pop(chat_id, [])
     if not msg_ids:
@@ -53,8 +59,8 @@ async def clear_round_guesses(client: Client, chat_id: int):
         for i in range(0, len(msg_ids), 100):
             batch = msg_ids[i:i + 100]
             await client.delete_messages(chat_id, batch)
-    except Exception:
-        pass
+    except Exception as e:
+        print(f"[Clear Round Guesses Error in {chat_id}]: {e}")
 
 
 # GROUP=100 RAKHO TAUB COMMANDS (GROUP 0) PEHLE EXECUTE HO SAKEIN
@@ -66,12 +72,12 @@ async def group_answer_handler(client: Client, message: Message):
 
     txt = message.text.strip()
 
-    # AGAR COMMAND HAI TOH PROPAGATE KARKE NIKLO
+    # Commands ignore karein
     if txt.startswith(("/", "!", ".")):
         message.continue_propagation()
         return
 
-    # Tagging ya links ko game guess mat samjho
+    # Tagging ya links ignore karein (group ki normal chat safe rahegi)
     if "@" in txt or "http://" in txt or "https://" in txt or "t.me/" in txt:
         message.continue_propagation()
         return
@@ -99,7 +105,7 @@ async def group_answer_handler(client: Client, message: Message):
     auto_del = bool(settings.get("auto_delete", 0))
 
     if cleaned_input == clean_answer(game["word"]):
-        # 1. Correct answer user ka hamesha delete hoga (chahe auto_delete ON ho ya OFF)
+        # 1. Correct answer hamesha delete hoga (chahe auto_delete on ho ya off)
         try:
             await message.delete()
         except Exception:
@@ -191,7 +197,7 @@ async def group_answer_handler(client: Client, message: Message):
         except Exception:
             pass
 
-        # 3. Main puzzle photo sirf tab delete hogi jab auto_delete ON hoga
+        # 3. Main puzzle photo sirf tab delete hogi jab auto_delete ON ho
         if auto_del and game["message_id"]:
             await safe_delete_and_unpin(client, chat_id, game["message_id"])
 
@@ -229,7 +235,7 @@ async def group_answer_handler(client: Client, message: Message):
             ]
         ]
 
-        # 4. Correct answer wala panel hamesha popup hokar 4s baad delete ho jayega
+        # 4. Correct answer wala panel hamesha 4s popup hoke delete hoga
         try:
             c_msg = await send_jumble_rich(client, chat_id, ans_caption, buttons)
             if c_msg:
