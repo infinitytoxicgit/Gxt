@@ -25,36 +25,27 @@ except Exception as e:
     print(f"[Custom Words Table Init]: {e}")
 
 
-async def can_manage_words(client: Client, message: Message) -> tuple[bool, str]:
-    if not message.from_user:
-        if message.sender_chat and message.sender_chat.id == message.chat.id:
-            return True, ""
-        return False, "❌ User info not found."
-
-    user_id = message.from_user.id
-
+# STRICT CHECK: SIRF BOT OWNER AUR AUTH USERS KE LIYE (CHAHE GROUP HO YA DM)
+def is_bot_admin_or_owner(user_id: int) -> bool:
+    if not user_id:
+        return False
     try:
         if int(user_id) == int(OWNER_ID):
-            return True, ""
+            return True
     except Exception:
         pass
+    return bool(is_owner(user_id) or is_authed(user_id))
 
-    try:
-        if is_owner(user_id) or is_authed(user_id):
-            return True, ""
-    except Exception:
-        pass
 
-    if message.chat.type == enums.ChatType.PRIVATE:
-        return False, "❌ DM me sirf Bot Owner aur Authorized users words manage kar sakte hain."
+def can_manage_words(message: Message) -> tuple[bool, str]:
+    if not message.from_user:
+        return False, "❌ Access Denied: Only Bot Owner & Authorized users can access Words Bank."
 
-    try:
-        member = await client.get_chat_member(message.chat.id, user_id)
-        if member.status in (enums.ChatMemberStatus.OWNER, enums.ChatMemberStatus.ADMINISTRATOR):
-            return True, ""
-        return False, "❌ Sirf Group Admins hi words manage kar sakte hain."
-    except Exception:
+    user_id = message.from_user.id
+    if is_bot_admin_or_owner(user_id):
         return True, ""
+
+    return False, "❌ Access Denied: Only Bot Owner & Authorized users can manage/view Words Bank."
 
 
 def get_words_for_diff(difficulty: str):
@@ -165,7 +156,7 @@ async def update_words_rich_view(client: Client, chat_id: int, message_id: int, 
 
 @Client.on_message(filters.command(["word", "words", "wordbank", "wordsbank", "jumblewords"], prefixes=["/", "!", "."]), group=-1)
 async def words_panel_cmd(client: Client, message: Message):
-    allowed, err_text = await can_manage_words(client, message)
+    allowed, err_text = can_manage_words(message)
     if not allowed:
         return await message.reply_text(f"<blockquote>{err_text}</blockquote>", parse_mode=enums.ParseMode.HTML)
 
@@ -175,6 +166,10 @@ async def words_panel_cmd(client: Client, message: Message):
 
 @Client.on_callback_query(filters.regex(r"^(wpage|wpage_close)"))
 async def words_pagination_callback(client: Client, query: CallbackQuery):
+    user_id = query.from_user.id if query.from_user else 0
+    if not is_bot_admin_or_owner(user_id):
+        return await query.answer("❌ Only Bot Owner & Authorized Admins can use this panel!", show_alert=True)
+
     if query.data == "wpage_close":
         try:
             await query.message.delete()
@@ -197,7 +192,7 @@ async def words_pagination_callback(client: Client, query: CallbackQuery):
 
 @Client.on_message(filters.command(["addword", "addwords"], prefixes=["/", "!", "."]), group=-1)
 async def bulk_add_words_cmd(client: Client, message: Message):
-    allowed, err_text = await can_manage_words(client, message)
+    allowed, err_text = can_manage_words(message)
     if not allowed:
         return await message.reply_text(f"<blockquote>{err_text}</blockquote>", parse_mode=enums.ParseMode.HTML)
 
@@ -269,7 +264,7 @@ async def bulk_add_words_cmd(client: Client, message: Message):
 
 @Client.on_message(filters.command(["delword", "delwords"], prefixes=["/", "!", "."]), group=-1)
 async def bulk_del_words_cmd(client: Client, message: Message):
-    allowed, err_text = await can_manage_words(client, message)
+    allowed, err_text = can_manage_words(message)
     if not allowed:
         return await message.reply_text(f"<blockquote>{err_text}</blockquote>", parse_mode=enums.ParseMode.HTML)
 
