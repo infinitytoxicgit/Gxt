@@ -58,7 +58,7 @@ def check_bulk_autodel_status(is_active_flag: int):
         return False
 
 # ============================================================
-# CHART & RICH PANEL BUILDER (WITH COLORS)
+# CHART & RICH PANEL BUILDER (WITH 3 SUPPORTED COLORS)
 # ============================================================
 
 def build_global_settings_view(view_mode: str = "inactive", page: int = 1):
@@ -110,15 +110,15 @@ def build_global_settings_view(view_mode: str = "inactive", page: int = 1):
         "• <b>Modes :</b> Change difficulty for this category.</blockquote>"
     )
 
-    # Category Switcher Buttons with Colors
+    # Category Switcher Buttons (Active = SUCCESS / Inactive = DANGER)
     switch_act_btn = types.RichMessageButton(
         text=f"{'✅ ' if flag==1 else ''}🟢 Active ({active_count})",
-        style=enums.ButtonStyle.SUCCESS if flag == 1 else enums.ButtonStyle.SECONDARY,
+        style=enums.ButtonStyle.SUCCESS if flag == 1 else enums.ButtonStyle.PRIMARY,
         callback_data="mgr_switch_active_1"
     )
     switch_inact_btn = types.RichMessageButton(
         text=f"{'✅ ' if flag==0 else ''}🔴 Inactive ({inactive_count})",
-        style=enums.ButtonStyle.DANGER if flag == 0 else enums.ButtonStyle.SECONDARY,
+        style=enums.ButtonStyle.DANGER if flag == 0 else enums.ButtonStyle.PRIMARY,
         callback_data="mgr_switch_inactive_1"
     )
 
@@ -157,14 +157,14 @@ def build_global_settings_view(view_mode: str = "inactive", page: int = 1):
         [switch_inact_btn, switch_act_btn],
         [action_main_btn, autodel_toggle_btn],
         [
-            types.RichMessageButton(text="🎯 Easy All", style=enums.ButtonStyle.PRIMARY, callback_data=f"mgr_setmode_easy_{view_mode}"),
-            types.RichMessageButton(text="🎯 Medium All", style=enums.ButtonStyle.PRIMARY, callback_data=f"mgr_setmode_medium_{view_mode}"),
-            types.RichMessageButton(text="🎯 Hard All", style=enums.ButtonStyle.PRIMARY, callback_data=f"mgr_setmode_hard_{view_mode}")
+            types.RichMessageButton(text="🟢 Easy All", style=enums.ButtonStyle.SUCCESS, callback_data=f"mgr_setmode_easy_{view_mode}"),
+            types.RichMessageButton(text="🟡 Medium All", style=enums.ButtonStyle.PRIMARY, callback_data=f"mgr_setmode_medium_{view_mode}"),
+            types.RichMessageButton(text="🔴 Hard All", style=enums.ButtonStyle.DANGER, callback_data=f"mgr_setmode_hard_{view_mode}")
         ],
         [
-            types.RichMessageButton(text="⬅️ Prev", style=enums.ButtonStyle.SECONDARY, callback_data=f"mgr_page_{view_mode}_{page - 1}"),
-            types.RichMessageButton(text=f"📄 {page}/{total_pages}", style=enums.ButtonStyle.SECONDARY, callback_data="mgr_noop"),
-            types.RichMessageButton(text="Next ➡️", style=enums.ButtonStyle.SECONDARY, callback_data=f"mgr_page_{view_mode}_{page + 1}")
+            types.RichMessageButton(text="⬅️ Prev", style=enums.ButtonStyle.PRIMARY, callback_data=f"mgr_page_{view_mode}_{page - 1}"),
+            types.RichMessageButton(text=f"📄 {page}/{total_pages}", style=enums.ButtonStyle.PRIMARY, callback_data="mgr_noop"),
+            types.RichMessageButton(text="Next ➡️", style=enums.ButtonStyle.PRIMARY, callback_data=f"mgr_page_{view_mode}_{page + 1}")
         ],
         [
             types.RichMessageButton(text="🔄 Refresh", style=enums.ButtonStyle.SUCCESS, callback_data=f"mgr_page_{view_mode}_{page}"),
@@ -266,7 +266,7 @@ async def global_settings_callback(client: Client, query: CallbackQuery):
             pass
         return
 
-    # Dynamic Auto-Delete TOGGLE (Works for both Inactive and Active)
+    # Dynamic Auto-Delete TOGGLE
     if data.startswith("mgr_toggle_autodel_"):
         parts = data.split("_")
         action = parts[3]     # on / off
@@ -315,6 +315,7 @@ async def global_settings_callback(client: Client, query: CallbackQuery):
         await query.message.reply_text(
             f"<blockquote>🚀 <b>MASS START INITIATED!</b>\n\n"
             f"• <b>Groups Starting :</b> <code>{len(groups)}</code>\n"
+            f"• <b>Auto-Delete :</b> 🟢 <b>Kept as configured</b>\n"
             f"• <b>Active Groups :</b> 🟢 <b>Safe</b>\n\n"
             f"Puzzles are being dispatched (0.5s interval).</blockquote>",
             parse_mode=enums.ParseMode.HTML
