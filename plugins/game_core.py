@@ -26,6 +26,16 @@ from pyrogram.errors import (
 from word_bank import choose_word, jumble_word
 from utils.rich import html_to_rich_blocks, send_jumble_rich
 
+# answers.py se wrong guesses tracker import karein
+try:
+    from plugins.answers import clear_round_guesses, GUESS_TRACKER
+except ImportError:
+    try:
+        from answers import clear_round_guesses, GUESS_TRACKER
+    except ImportError:
+        clear_round_guesses = None
+        GUESS_TRACKER = None
+
 
 async def check_admin_safe(chat, user_id: int) -> bool:
     if is_owner(user_id) or is_authed(user_id):
@@ -92,11 +102,17 @@ async def start_game(client: Client, chat_id: int, difficulty: str, message_or_c
     if not settings.get("is_active", 1):
         return
 
+    auto_del = bool(settings.get("auto_delete", 0))
+
     old_game = DB.execute("SELECT message_id FROM games WHERE chat_id=?", (chat_id,)).fetchone()
-    if old_game and settings.get("auto_delete") and old_game["message_id"]:
+    if old_game and auto_del and old_game["message_id"]:
         await safe_delete_and_unpin(client, chat_id, old_game["message_id"])
 
     DB.execute("DELETE FROM games WHERE chat_id=?", (chat_id,))
+
+    # Naye puzzle round se pehle guess list reset
+    if GUESS_TRACKER is not None:
+        GUESS_TRACKER.pop(chat_id, None)
 
     word = choose_word(chat_id, difficulty)
     jumbled = jumble_word(word)
@@ -166,7 +182,15 @@ async def expire_game(client: Client, chat_id: int, puzzle_id: int, expires: flo
 
     raw_s = get_settings(chat_id)
     s = dict(raw_s) if raw_s else {}
-    if s.get("auto_delete") and row["message_id"] and chat_id < 0:
+    auto_del = bool(s.get("auto_delete", 0))
+
+    # Auto Delete ON hone par hi wrong answers delete honge
+    if auto_del and clear_round_guesses:
+        asyncio.create_task(clear_round_guesses(client, chat_id))
+    elif GUESS_TRACKER is not None:
+        GUESS_TRACKER.pop(chat_id, None)
+
+    if auto_del and row["message_id"] and chat_id < 0:
         await safe_delete_and_unpin(client, chat_id, row["message_id"])
 
     try:
@@ -177,7 +201,7 @@ async def expire_game(client: Client, chat_id: int, puzzle_id: int, expires: flo
             f"🔄 <i>Next puzzle starting in 1 second...</i></blockquote>"
         )
         exp_msg = await send_jumble_rich(client, chat_id, expire_caption)
-        if s.get("auto_delete") and exp_msg:
+        if auto_del and exp_msg:
             asyncio.create_task(delete_after(exp_msg, 4))
     except (ChannelInvalid, ChannelPrivate, PeerIdInvalid, UserIsBlocked):
         await disable_dead_chat(chat_id)
@@ -288,7 +312,14 @@ async def skip_cmd(client: Client, message: Message):
 
     raw_s = get_settings(chat_id)
     s = dict(raw_s) if raw_s else {}
-    if s.get("auto_delete") and game["message_id"] and chat_id < 0:
+    auto_del = bool(s.get("auto_delete", 0))
+
+    if auto_del and clear_round_guesses:
+        asyncio.create_task(clear_round_guesses(client, chat_id))
+    elif GUESS_TRACKER is not None:
+        GUESS_TRACKER.pop(chat_id, None)
+
+    if auto_del and game["message_id"] and chat_id < 0:
         await safe_delete_and_unpin(client, chat_id, game["message_id"])
 
     skip_caption = (
@@ -297,7 +328,7 @@ async def skip_cmd(client: Client, message: Message):
         f"🔄 <i>Next puzzle starting in 1 second...</i></blockquote>"
     )
     msg = await send_jumble_rich(client, chat_id, skip_caption)
-    if s.get("auto_delete") and msg:
+    if auto_del and msg:
         asyncio.create_task(delete_after(msg, 4))
 
     await asyncio.sleep(1)
@@ -324,7 +355,14 @@ async def end_game_cmd(client: Client, message: Message):
     DB.execute("UPDATE games SET solved=1 WHERE chat_id=?", (chat_id,))
     DB.commit()
 
-    if game and game["message_id"] and chat_id < 0:
+    raw_s = get_settings(chat_id)
+    s = dict(raw_s) if raw_s else {}
+    auto_del = bool(s.get("auto_delete", 0))
+
+    if auto_del and clear_round_guesses:
+        asyncio.create_task(clear_round_guesses(client, chat_id))
+
+    if auto_del and game and game["message_id"] and chat_id < 0:
         await safe_delete_and_unpin(client, chat_id, game["message_id"])
 
     await message.reply_text("<blockquote>🛑 <b>Jumble Game has been stopped.</b></blockquote>", parse_mode=enums.ParseMode.HTML)
@@ -397,7 +435,14 @@ async def puzzle_buttons_listener(client: Client, query: CallbackQuery):
 
         raw_s = get_settings(chat_id)
         s = dict(raw_s) if raw_s else {}
-        if s.get("auto_delete") and game["message_id"] and chat_id < 0:
+        auto_del = bool(s.get("auto_delete", 0))
+
+        if auto_del and clear_round_guesses:
+            asyncio.create_task(clear_round_guesses(client, chat_id))
+        elif GUESS_TRACKER is not None:
+            GUESS_TRACKER.pop(chat_id, None)
+
+        if auto_del and game["message_id"] and chat_id < 0:
             await safe_delete_and_unpin(client, chat_id, game["message_id"])
 
         await query.answer("⏭️ Puzzle skipped successfully!")
@@ -408,7 +453,7 @@ async def puzzle_buttons_listener(client: Client, query: CallbackQuery):
             f"🔄 <i>Next puzzle starting in 1 second...</i></blockquote>"
         )
         msg = await send_jumble_rich(client, chat_id, skip_caption)
-        if s.get("auto_delete") and msg:
+        if auto_del and msg:
             asyncio.create_task(delete_after(msg, 4))
 
         await asyncio.sleep(1)
@@ -435,7 +480,10 @@ async def puzzle_buttons_listener(client: Client, query: CallbackQuery):
 @Client.on_message(filters.service & filters.group, group=9)
 async def auto_clean_service_pins(client: Client, message: Message):
     if getattr(message, "pinned_message", None):
-        try:
-            await message.delete()
-        except Exception:
-            pass
+        raw_s = get_settings(message.chat.id)
+        s = dict(raw_s) if raw_s else {}
+        if s.get("auto_delete"):
+            try:
+                await message.delete()
+            except Exception:
+                pass
