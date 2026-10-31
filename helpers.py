@@ -107,7 +107,7 @@ async def safe_delete_and_unpin(client, chat_id: int, message_id: int):
     except Exception:
         pass
     try:
-        await client.delete_messages(chat_id, message_id)
+        await client.delete_messages(chat_id, [message_id])
     except Exception:
         pass
 
@@ -116,12 +116,7 @@ async def safe_pin_and_clean(client, chat_id: int, message_id: int):
     if not message_id:
         return
     try:
-        pin_res = await client.pin_chat_message(chat_id, message_id, disable_notification=True)
-        if pin_res and hasattr(pin_res, "id") and pin_res.id != message_id:
-            try:
-                await client.delete_messages(chat_id, pin_res.id)
-            except Exception:
-                pass
+        await client.pin_chat_message(chat_id, message_id, disable_notification=True, both_sides=True)
     except Exception:
         pass
 
@@ -138,17 +133,17 @@ def _fetch_user_full_stats(user_id: int):
         u = DB.execute("SELECT * FROM users WHERE user_id=?", (user_id,)).fetchone()
         if u:
             u_dict = dict(u) if hasattr(u, "keys") else {}
-            # Fallback if tuple
             if not u_dict and isinstance(u, (list, tuple)):
                 data["balance"] = u[2] if len(u) > 2 else 0
             else:
                 data["balance"] = u_dict.get("stars", 0) if u_dict.get("stars", 0) > 0 else u_dict.get("points", 0)
-                data["total_solved"] = u_dict.get("correct", 0)
-                data["easy_solved"] = u_dict.get("easy_correct", 0)
-                data["med_solved"] = u_dict.get("medium_correct", 0)
-                data["hard_solved"] = u_dict.get("hard_correct", 0)
-    except Exception:
-        pass
+                # Schema matching: check *_solved first, then fallback to *_correct
+                data["total_solved"] = u_dict.get("solved", u_dict.get("correct", 0))
+                data["easy_solved"] = u_dict.get("easy_solved", u_dict.get("easy_correct", 0))
+                data["med_solved"] = u_dict.get("medium_solved", u_dict.get("medium_correct", 0))
+                data["hard_solved"] = u_dict.get("hard_solved", u_dict.get("hard_correct", 0))
+    except Exception as e:
+        print(f"[Fetch User Stats Error]: {e}")
     return data
 
 
@@ -162,10 +157,26 @@ async def send_log_event(client: Client, user, chat, word: str, raw_guess: str, 
     try:
         u_stats = _fetch_user_full_stats(user.id)
         current_bal = u_stats["balance"]
-        
+
         if old_balance is None:
             old_balance = max(0, current_bal - points)
         new_balance = old_balance + points
+
+        # Ensure active puzzle completion is reflected immediately
+        easy_cnt = u_stats["easy_solved"]
+        med_cnt = u_stats["med_solved"]
+        hard_cnt = u_stats["hard_solved"]
+        total_cnt = u_stats["total_solved"]
+
+        d_lower = str(diff).lower()
+        if d_lower == "easy":
+            easy_cnt = max(1, easy_cnt)
+        elif d_lower == "hard":
+            hard_cnt = max(1, hard_cnt)
+        else:
+            med_cnt = max(1, med_cnt)
+
+        total_cnt = max(total_cnt, easy_cnt + med_cnt + hard_cnt)
 
         chat_title = html.escape(getattr(chat, "title", "Direct Message") or "Chat")
         chat_id = getattr(chat, "id", 0)
@@ -177,7 +188,7 @@ async def send_log_event(client: Client, user, chat, word: str, raw_guess: str, 
         if getattr(chat, "username", None):
             buttons.append([InlineKeyboardButton("🏰 Group Chat", url=f"https://t.me/{chat.username}")])
 
-        diff_emoji = "🟢" if diff.lower() == "easy" else "🟡" if diff.lower() == "medium" else "🔴"
+        diff_emoji = "🟢" if d_lower == "easy" else "🟡" if d_lower == "medium" else "🔴"
 
         log_text = (
             "<blockquote>🧩 <u><b>JUMBLE PUZZLE SOLVED LOG</b></u></blockquote>\n\n"
@@ -191,8 +202,8 @@ async def send_log_event(client: Client, user, chat, word: str, raw_guess: str, 
             "<blockquote>💰 <b>LIVE BALANCE TRACKER :</b>\n"
             f"• <b>Transition :</b> <code>{old_balance:,}</code> <b>+</b> <code>{points:,}</code> ➔ <code>{new_balance:,} pts</code></blockquote>\n\n"
             "<blockquote>📊 <b>PLAYER CAREER STATS :</b>\n"
-            f"• <b>Total Solved :</b> <code>{u_stats['total_solved'] + 1}</code>\n"
-            f"• <b>Easy :</b> <code>{u_stats['easy_solved']}</code> | <b>Medium :</b> <code>{u_stats['med_solved']}</code> | <b>Hard :</b> <code>{u_stats['hard_solved']}</code></blockquote>"
+            f"• <b>Total Solved :</b> <code>{total_cnt}</code>\n"
+            f"• <b>Easy :</b> <code>{easy_cnt}</code> | <b>Medium :</b> <code>{med_cnt}</code> | <b>Hard :</b> <code>{hard_cnt}</code></blockquote>"
         )
 
         await client.send_message(
