@@ -99,14 +99,13 @@ async def group_answer_handler(client: Client, message: Message):
     auto_del = bool(settings.get("auto_delete", 0))
 
     if cleaned_input == clean_answer(game["word"]):
-        # Agar auto_delete on hai toh user ka correct message instant delete karo
-        if auto_del:
-            try:
-                await message.delete()
-            except Exception:
-                pass
+        # 1. Correct answer user ka hamesha delete hoga (chahe auto_delete ON ho ya OFF)
+        try:
+            await message.delete()
+        except Exception:
+            pass
 
-        # Round ke dauran jitne bhi galat answers aaye the unko clear karo
+        # 2. Galat guesses sirf tab delete honge jab auto_delete ON hoga
         if auto_del:
             asyncio.create_task(clear_round_guesses(client, chat_id))
         else:
@@ -192,6 +191,7 @@ async def group_answer_handler(client: Client, message: Message):
         except Exception:
             pass
 
+        # 3. Main puzzle photo sirf tab delete hogi jab auto_delete ON hoga
         if auto_del and game["message_id"]:
             await safe_delete_and_unpin(client, chat_id, game["message_id"])
 
@@ -229,9 +229,10 @@ async def group_answer_handler(client: Client, message: Message):
             ]
         ]
 
+        # 4. Correct answer wala panel hamesha popup hokar 4s baad delete ho jayega
         try:
             c_msg = await send_jumble_rich(client, chat_id, ans_caption, buttons)
-            if auto_del and c_msg:
+            if c_msg:
                 asyncio.create_task(delete_after(c_msg, 4))
         except Exception as se:
             print(f"[Win Card Error]: {se}")
@@ -244,7 +245,7 @@ async def group_answer_handler(client: Client, message: Message):
         except Exception as ge:
             print(f"[Spawn Next Error]: {ge}")
     else:
-        # Agar answer match nahi hua par target word se related galat guess hai toh track karo
+        # Galat guess sirf tab store karein jab auto_delete ON ho
         if auto_del and is_actual_game_guess(txt, game["word"]):
             GUESS_TRACKER[chat_id].append(message.id)
         message.continue_propagation()
