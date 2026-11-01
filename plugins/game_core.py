@@ -47,11 +47,9 @@ async def check_admin_safe(client: Client, chat_id: int, user_id: int) -> bool:
     if not user_id:
         return False
 
-    # 1. Direct Owner ya Auth User check
     if is_owner(user_id) or is_authed(user_id):
         return True
 
-    # 2. Helpers ka is_admin_or_owner check (both signatures handled)
     try:
         res = await is_admin_or_owner(chat_id, user_id)
         if res:
@@ -67,7 +65,6 @@ async def check_admin_safe(client: Client, chat_id: int, user_id: int) -> bool:
     except Exception:
         pass
 
-    # 3. Direct Pyrogram Client call (Most Reliable)
     try:
         member = await client.get_chat_member(chat_id, user_id)
         return member.status in (enums.ChatMemberStatus.OWNER, enums.ChatMemberStatus.ADMINISTRATOR)
@@ -113,6 +110,24 @@ async def disable_dead_chat(chat_id: int):
         pass
 
 
+# ============================================================
+# PURANE AUR SPAM HUYE PIN SERVICE MESSAGES CLEAN KARNE WALA FUNCTION
+# ============================================================
+async def clean_old_service_pins(client: Client, chat_id: int):
+    """Pichhle recent messages scan karke 'pinned a message' service alerts ko delete karta hai."""
+    if chat_id > 0:
+        return
+    try:
+        service_ids = []
+        async for m in client.get_chat_history(chat_id, limit=20):
+            if getattr(m, "pinned_message", None) or getattr(m, "service", None) == enums.MessageServiceType.PINNED_MESSAGE:
+                service_ids.append(m.id)
+        if service_ids:
+            await client.delete_messages(chat_id, service_ids)
+    except Exception:
+        pass
+
+
 async def start_game(client: Client, chat_id: int, difficulty: str, message_or_chat):
     if chat_id in ACTIVE_FIGHTS:
         return
@@ -128,10 +143,13 @@ async def start_game(client: Client, chat_id: int, difficulty: str, message_or_c
     if old_game and auto_del and old_game["message_id"] and chat_id < 0:
         await safe_delete_and_unpin(client, chat_id, old_game["message_id"])
 
+    # Auto Delete ON hone par purane bache huye pin alerts saaf honge
+    if auto_del and chat_id < 0:
+        asyncio.create_task(clean_old_service_pins(client, chat_id))
+
     DB.execute("DELETE FROM games WHERE chat_id=?", (chat_id,))
     DB.commit()
 
-    # Naye puzzle round se pehle guess list reset
     if GUESS_TRACKER is not None:
         GUESS_TRACKER.pop(chat_id, None)
 
@@ -176,6 +194,8 @@ async def start_game(client: Client, chat_id: int, difficulty: str, message_or_c
             DB.commit()
             if chat_id < 0:
                 await safe_pin_and_clean(client, chat_id, sent.id)
+                if auto_del:
+                    asyncio.create_task(clean_old_service_pins(client, chat_id))
     except (ChannelInvalid, ChannelPrivate, PeerIdInvalid, UserIsBlocked, InputUserDeactivated):
         print(f"[Deactivating Inaccessible Chat]: {chat_id}")
         await disable_dead_chat(chat_id)
@@ -494,12 +514,13 @@ async def puzzle_buttons_listener(client: Client, query: CallbackQuery):
 
 
 # ============================================================
-# SERVICE PIN NOTIFICATION CLEANER
+# INSTANT SERVICE PIN NOTIFICATION CLEANER (PRIORITY -10)
 # ============================================================
 
-@Client.on_message(filters.service & filters.group, group=9)
+@Client.on_message(filters.service & filters.group, group=-10)
 async def auto_clean_service_pins(client: Client, message: Message):
-    if getattr(message, "pinned_message", None):
+    # Jaise hi bot message pin kare, alert bante hi turant delete hoga
+    if getattr(message, "pinned_message", None) or getattr(message, "service", None) == enums.MessageServiceType.PINNED_MESSAGE:
         raw_s = get_settings(message.chat.id)
         s = dict(raw_s) if raw_s else {}
         if s.get("auto_delete"):
