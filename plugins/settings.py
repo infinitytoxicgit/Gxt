@@ -20,6 +20,24 @@ async def check_admin_safe(client: Client, chat_id: int, user_id: int) -> bool:
         return False
 
 
+# ============================================================
+# PURANE SPAM HUYE SERVICE PINS KO INSTANT CLEAN KARNE KA LOGIC
+# ============================================================
+async def clean_chat_service_pins(client: Client, chat_id: int):
+    """Auto-Delete ON hote hi chat ke purane pinned alerts ko ek saath delete karta hai."""
+    if chat_id > 0:
+        return
+    try:
+        service_ids = []
+        async for m in client.get_chat_history(chat_id, limit=30):
+            if getattr(m, "pinned_message", None) or getattr(m, "service", None) == enums.MessageServiceType.PINNED_MESSAGE:
+                service_ids.append(m.id)
+        if service_ids:
+            await client.delete_messages(chat_id, service_ids)
+    except Exception:
+        pass
+
+
 def build_settings_card(chat_id: int, chat_title: str):
     raw_s = get_settings(chat_id)
     s = dict(raw_s) if raw_s else {}
@@ -159,7 +177,6 @@ async def update_settings_rich_view(client: Client, chat_id: int, message_id: in
         await send_jumble_rich(client, chat_id, caption, buttons)
 
 
-# FILTERS.GROUP HATAYA GAYA HAI TAUB DM MEIN BHI KAAM KARE
 @Client.on_message(filters.command(["settings", "setting", "jumblesettings"], prefixes=["/", "!", "."]), group=-1)
 async def settings_cmd(client: Client, message: Message):
     if not message.from_user:
@@ -168,7 +185,6 @@ async def settings_cmd(client: Client, message: Message):
     chat_id = message.chat.id
     is_dm = message.chat.type in (enums.ChatType.PRIVATE,)
 
-    # Agar group hai toh admin check hoga, DM hai toh allow rahega
     if not is_dm:
         is_admin = await check_admin_safe(client, chat_id, message.from_user.id)
         if not is_admin:
@@ -201,11 +217,10 @@ async def settings_callback_router(client: Client, query: CallbackQuery):
         s = dict(get_settings(chat_id))
         new_val = 0 if s.get("is_active", 1) else 1
         DB.execute("UPDATE settings SET is_active=? WHERE chat_id=?", (new_val, chat_id))
-        
-        # Agar game STOP kiya hai toh current running game delete kar do taaki lagatar puzzle aana turant ruk jaye
+
         if new_val == 0:
             DB.execute("DELETE FROM games WHERE chat_id=?", (chat_id,))
-            
+
         DB.commit()
         await query.answer(f"Game Status: {'Running' if new_val else 'Stopped'}")
 
@@ -220,6 +235,10 @@ async def settings_callback_router(client: Client, query: CallbackQuery):
         DB.execute("UPDATE settings SET auto_delete=? WHERE chat_id=?", (new_val, chat_id))
         DB.commit()
         await query.answer(f"Auto-Delete: {'ON' if new_val else 'OFF'}")
+
+        # AutoDel ON hote hi purane bache huye pin service messages turant clean honge
+        if new_val == 1 and not is_dm:
+            asyncio.create_task(clean_chat_service_pins(client, chat_id))
 
     elif action == "set_diff":
         diff = data[1]
