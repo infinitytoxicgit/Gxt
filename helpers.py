@@ -2,9 +2,9 @@ import asyncio
 import html
 import time
 from config import OWNER_ID, LOG_CHANNEL
-from database import DB, get_global_config
+from database import DB, get_global_config, get_settings
 from pyrogram import Client
-from pyrogram.enums import ChatType, ChatMemberStatus, ParseMode
+from pyrogram.enums import ChatType, ChatMemberStatus, ParseMode, MessageServiceType
 from pyrogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton
 
 LOCK = asyncio.Lock()
@@ -113,12 +113,43 @@ async def safe_delete_and_unpin(client, chat_id: int, message_id: int):
 
 
 async def safe_pin_and_clean(client, chat_id: int, message_id: int):
-    if not message_id:
+    """Naya puzzle pin karega aur turant generate huye pin alert ko delete karega."""
+    if not message_id or chat_id > 0:
         return
+
+    # Auto Delete status check
+    try:
+        raw_s = get_settings(chat_id)
+        s = dict(raw_s) if raw_s else {}
+        auto_del = bool(s.get("auto_delete", 0))
+    except Exception:
+        auto_del = False
+
     try:
         await client.pin_chat_message(chat_id, message_id, disable_notification=True, both_sides=True)
-    except Exception:
-        pass
+    except Exception as e:
+        print(f"[Pin Error]: {e}")
+        return
+
+    # Agar auto_delete ON hai tabhi service pin alert delete hoga
+    if auto_del:
+        await asyncio.sleep(0.4)
+        # Direct targets: pinned message ke theek baad aane wali service notification IDs
+        try:
+            await client.delete_messages(chat_id, [message_id + 1, message_id + 2])
+        except Exception:
+            pass
+
+        # History scan fallback: agar alert ID alag generate hui ho to bhi delete ho jaye
+        try:
+            service_ids = []
+            async for m in client.get_chat_history(chat_id, limit=5):
+                if getattr(m, "pinned_message", None) or getattr(m, "service", None) == MessageServiceType.PINNED_MESSAGE:
+                    service_ids.append(m.id)
+            if service_ids:
+                await client.delete_messages(chat_id, service_ids)
+        except Exception:
+            pass
 
 
 def _fetch_user_full_stats(user_id: int):
