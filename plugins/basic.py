@@ -31,7 +31,7 @@ async def set_private_mode(client: Client, message: Message):
 
 
 # ============================================================
-# REWARDS: /daily (DM ONLY) & /bonus (GROUP ADMIN VERIFIED)
+# REWARDS: /daily (DM ONLY) & /bonus (GROUP ADMIN ONLY - 1 TIME)
 # ============================================================
 
 @Client.on_message(filters.command(["daily"], prefixes=VALID_PREFIXES))
@@ -75,16 +75,26 @@ async def daily_cmd(client: Client, message: Message):
 @Client.on_message(filters.command(["bonus"], prefixes=VALID_PREFIXES))
 async def group_bonus_cmd(client: Client, message: Message):
     if message.chat.type == enums.ChatType.PRIVATE:
-        return await message.reply_text("<blockquote>❌ <b>/bonus</b> group ke andar run karein jahan aapne bot ko admin banaya ho!</blockquote>", parse_mode=enums.ParseMode.HTML)
+        return await message.reply_text("<blockquote>❌ <b>/bonus</b> group ke andar run karein jahan aapne bot ko add kiya ho!</blockquote>", parse_mode=enums.ParseMode.HTML)
 
     chat_id = message.chat.id
     user_id = message.from_user.id
     ensure_user(message.from_user)
 
+    # 1. Check agar group me pehle claim ho chuka hai (Sirf 1 baar allowed)
     already = DB.execute("SELECT * FROM group_bonus WHERE chat_id=?", (chat_id,)).fetchone()
     if already:
-        return await message.reply_text("<blockquote>❌ Is group ka bonus pehle hi claim kiya ja chuka hai! Ek group ka bonus sirf 1 baar milta hai.</blockquote>", parse_mode=enums.ParseMode.HTML)
+        return await message.reply_text("<blockquote>❌ Is group ka addition bonus pehle hi claim kiya ja chuka hai! Ek group ka bonus sirf 1 baar milta hai.</blockquote>", parse_mode=enums.ParseMode.HTML)
 
+    # 2. Check ki claim karne wala Group Admin/Owner ho
+    try:
+        user_member = await client.get_chat_member(chat_id, user_id)
+        if user_member.status not in (enums.ChatMemberStatus.ADMINISTRATOR, enums.ChatMemberStatus.OWNER):
+            return await message.reply_text("<blockquote>❌ Yeh bonus sirf group ke <b>Admin ya Owner</b> hi claim kar sakte hain!</blockquote>", parse_mode=enums.ParseMode.HTML)
+    except Exception:
+        return await message.reply_text("<blockquote>❌ User permissions check karne me error aaya.</blockquote>", parse_mode=enums.ParseMode.HTML)
+
+    # 3. Check ki Bot khud group me admin ho
     try:
         bot_member = await client.get_chat_member(chat_id, (await client.get_me()).id)
         if bot_member.status not in (enums.ChatMemberStatus.ADMINISTRATOR, enums.ChatMemberStatus.OWNER):
@@ -92,7 +102,8 @@ async def group_bonus_cmd(client: Client, message: Message):
     except Exception:
         return await message.reply_text("<blockquote>❌ Bot permissions verify nahi ho saki. Bot ko Admin rights dein.</blockquote>", parse_mode=enums.ParseMode.HTML)
 
-    bonus_amt = int(get_global_config("group_bonus_points", 200))
+    # Dynamic bonus amount fetch (defaults synced)
+    bonus_amt = int(get_global_config("bonus_points", get_global_config("group_bonus_points", 200)))
 
     DB.execute("INSERT INTO group_bonus (chat_id, user_id, claimed_at) VALUES (?, ?, ?)", (chat_id, user_id, time.time()))
     DB.execute("UPDATE users SET stars = stars + ?, points = points + ? WHERE user_id = ?", (bonus_amt, bonus_amt, user_id))
@@ -114,26 +125,32 @@ async def group_bonus_cmd(client: Client, message: Message):
 
 @Client.on_message(filters.command(["setdaily"], prefixes=VALID_PREFIXES))
 async def set_daily_amount_cmd(client: Client, message: Message):
-    if not await is_admin_or_owner(message.chat, message.from_user.id):
-        return await message.reply_text("❌ Only Owner/Auth can change daily reward.")
+    user_id = message.from_user.id if message.from_user else 0
+    if not is_owner(user_id) and not is_authed(user_id):
+        return await message.reply_text("❌ Only Owner/Auth Admins can change daily reward.")
+
     if len(message.command) < 2 or not message.command[1].isdigit():
         return await message.reply_text("ℹ️ **Usage:** `/setdaily [amount]`")
 
     val = int(message.command[1])
     set_global_config("daily_bonus", val)
-    await message.reply_text(f"<blockquote>✅ Daily Bonus set to: <b>+{val} Stars</b></blockquote>", parse_mode=enums.ParseMode.HTML)
+    set_global_config("daily_points", val)
+    await message.reply_text(f"<blockquote>✅ <b>Daily Bonus set to:</b> <code>+{val} Stars/Points</code></blockquote>", parse_mode=enums.ParseMode.HTML)
 
 
 @Client.on_message(filters.command(["setbonus"], prefixes=VALID_PREFIXES))
 async def set_group_bonus_amount_cmd(client: Client, message: Message):
-    if not await is_admin_or_owner(message.chat, message.from_user.id):
-        return await message.reply_text("❌ Only Owner/Auth can change group addition bonus.")
+    user_id = message.from_user.id if message.from_user else 0
+    if not is_owner(user_id) and not is_authed(user_id):
+        return await message.reply_text("❌ Only Owner/Auth Admins can change group addition bonus.")
+
     if len(message.command) < 2 or not message.command[1].isdigit():
         return await message.reply_text("ℹ️ **Usage:** `/setbonus [amount]`")
 
     val = int(message.command[1])
+    set_global_config("bonus_points", val)
     set_global_config("group_bonus_points", val)
-    await message.reply_text(f"<blockquote>✅ Group Addition Bonus set to: <b>+{val} Stars</b></blockquote>", parse_mode=enums.ParseMode.HTML)
+    await message.reply_text(f"<blockquote>🎉 <b>Group Addition Bonus set to:</b> <code>+{val} Stars/Points</code></blockquote>", parse_mode=enums.ParseMode.HTML)
 
 
 async def _resolve_user_target(client: Client, message: Message):
@@ -155,7 +172,8 @@ async def _resolve_user_target(client: Client, message: Message):
 
 @Client.on_message(filters.command(["addstar", "addstars", "addpoint", "addpoints"], prefixes=VALID_PREFIXES))
 async def add_stars_cmd(client: Client, message: Message):
-    if not is_owner(message.from_user.id) and not is_authed(message.from_user.id):
+    user_id = message.from_user.id if message.from_user else 0
+    if not is_owner(user_id) and not is_authed(user_id):
         return await message.reply_text("❌ Sirf Bot Owner & Auth Admins balance add kar sakte hain.")
 
     target = await _resolve_user_target(client, message)
@@ -184,7 +202,8 @@ async def add_stars_cmd(client: Client, message: Message):
 
 @Client.on_message(filters.command(["deductstar", "deductstars", "removestar", "removestars"], prefixes=VALID_PREFIXES))
 async def deduct_stars_cmd(client: Client, message: Message):
-    if not is_owner(message.from_user.id) and not is_authed(message.from_user.id):
+    user_id = message.from_user.id if message.from_user else 0
+    if not is_owner(user_id) and not is_authed(user_id):
         return await message.reply_text("❌ Sirf Bot Owner & Auth Admins balance deduct kar sakte hain.")
 
     target = await _resolve_user_target(client, message)
@@ -271,7 +290,7 @@ def get_stats_content_and_image(target, user_data):
     easy_c = int(user_dict.get("easy_solved") or 0)
     med_c = int(user_dict.get("medium_solved") or 0)
     hard_c = int(user_dict.get("hard_solved") or 0)
-    
+
     img_path = None
     try:
         img_path = make_stats_graph_image(target.first_name, easy_c, med_c, hard_c, current_level, rem_exp, exp_per_lvl)
@@ -413,7 +432,6 @@ async def lb_view_callback(client: Client, query: CallbackQuery):
     caption, buttons, graph_img = build_leaderboard_card(scope, period, chat_id)
     await query.answer()
 
-    # Smooth Rich Card Transition: Purana delete karke fresh rich with updated photo drop karein
     try:
         await query.message.delete()
     except Exception:
@@ -460,8 +478,7 @@ async def calculate_cmd(client: Client, message: Message):
         )
 
     raw_expr = message.text.split(None, 1)[1].strip()
-    
-    # Validation
+
     allowed_chars = set("0123456789+-*/(). %^")
     if not all(c in allowed_chars for c in raw_expr):
         return await message.reply_text("❌ Sirf basic mathematical operations allowed hain!")
