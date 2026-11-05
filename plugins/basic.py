@@ -4,7 +4,15 @@ from datetime import datetime
 from pyrogram import Client, filters, enums, types
 from pyrogram.types import Message, CallbackQuery
 from database import DB, ensure_user, get_user, get_settings, is_admin, get_global_config, set_global_config
-from helpers import get_mention, is_admin_or_owner, is_authed, is_owner
+from helpers import (
+    get_mention, 
+    is_admin_or_owner, 
+    is_authed, 
+    is_owner,
+    send_daily_claim_log,
+    send_group_bonus_log,
+    send_balance_modify_log
+)
 from image_gen import make_stats_graph_image, make_leaderboard_graph_image
 from utils.rich import send_jumble_rich, edit_jumble_rich, make_exp_slider_row, html_to_rich_blocks
 
@@ -53,6 +61,8 @@ async def daily_cmd(client: Client, message: Message):
         return await message.reply_text(f"<blockquote>⏳ <b>Already Claimed!</b>\nNext claim unlocks in: <code>{h}h {m}m</code></blockquote>", parse_mode=enums.ParseMode.HTML)
 
     reward_amt = int(get_global_config("daily_bonus", 100))
+    old_bal = int(u_dict.get("stars", 0) if u_dict.get("stars", 0) > 0 else u_dict.get("points", 0))
+
     DB.execute("""
         UPDATE users SET 
             stars = stars + ?, 
@@ -71,6 +81,12 @@ async def daily_cmd(client: Client, message: Message):
     )
     await send_jumble_rich(client, message.chat.id, caption)
 
+    # Channel/Group par Live Log send karein
+    try:
+        await send_daily_claim_log(client, message.from_user, reward_amt, old_bal)
+    except Exception as e:
+        print(f"[Daily Log Err]: {e}")
+
 
 @Client.on_message(filters.command(["bonus"], prefixes=VALID_PREFIXES))
 async def group_bonus_cmd(client: Client, message: Message):
@@ -81,12 +97,12 @@ async def group_bonus_cmd(client: Client, message: Message):
     user_id = message.from_user.id
     ensure_user(message.from_user)
 
-    # 1. Check agar group me pehle claim ho chuka hai (Sirf 1 baar allowed)
+    # 1. Ek group me sirf 1 baar allow karein
     already = DB.execute("SELECT * FROM group_bonus WHERE chat_id=?", (chat_id,)).fetchone()
     if already:
         return await message.reply_text("<blockquote>❌ Is group ka addition bonus pehle hi claim kiya ja chuka hai! Ek group ka bonus sirf 1 baar milta hai.</blockquote>", parse_mode=enums.ParseMode.HTML)
 
-    # 2. Check ki claim karne wala Group Admin/Owner ho
+    # 2. Check: Claim karne wala group admin/owner ho
     try:
         user_member = await client.get_chat_member(chat_id, user_id)
         if user_member.status not in (enums.ChatMemberStatus.ADMINISTRATOR, enums.ChatMemberStatus.OWNER):
@@ -94,7 +110,7 @@ async def group_bonus_cmd(client: Client, message: Message):
     except Exception:
         return await message.reply_text("<blockquote>❌ User permissions check karne me error aaya.</blockquote>", parse_mode=enums.ParseMode.HTML)
 
-    # 3. Check ki Bot khud group me admin ho
+    # 3. Check: Bot group me admin ho
     try:
         bot_member = await client.get_chat_member(chat_id, (await client.get_me()).id)
         if bot_member.status not in (enums.ChatMemberStatus.ADMINISTRATOR, enums.ChatMemberStatus.OWNER):
@@ -102,8 +118,11 @@ async def group_bonus_cmd(client: Client, message: Message):
     except Exception:
         return await message.reply_text("<blockquote>❌ Bot permissions verify nahi ho saki. Bot ko Admin rights dein.</blockquote>", parse_mode=enums.ParseMode.HTML)
 
-    # Dynamic bonus amount fetch (defaults synced)
     bonus_amt = int(get_global_config("bonus_points", get_global_config("group_bonus_points", 200)))
+    
+    u = get_user(user_id)
+    u_dict = dict(u) if u else {}
+    old_bal = int(u_dict.get("stars", 0) if u_dict.get("stars", 0) > 0 else u_dict.get("points", 0))
 
     DB.execute("INSERT INTO group_bonus (chat_id, user_id, claimed_at) VALUES (?, ?, ?)", (chat_id, user_id, time.time()))
     DB.execute("UPDATE users SET stars = stars + ?, points = points + ? WHERE user_id = ?", (bonus_amt, bonus_amt, user_id))
@@ -117,6 +136,12 @@ async def group_bonus_cmd(client: Client, message: Message):
         "<blockquote><i>Thank you for adding & promoting Jumble Bot!</i></blockquote>"
     )
     await send_jumble_rich(client, chat_id, caption)
+
+    # Channel/Group par Live Group Bonus Log send karein
+    try:
+        await send_group_bonus_log(client, message.from_user, message.chat, bonus_amt, old_bal)
+    except Exception as e:
+        print(f"[Bonus Log Err]: {e}")
 
 
 # ============================================================
@@ -187,17 +212,28 @@ async def add_stars_cmd(client: Client, message: Message):
         return await message.reply_text("ℹ️ **Usage:** `/addstar @user 500` ya user ke message par reply karein.")
 
     ensure_user(target)
+    u_old = dict(get_user(target.id))
+    old_bal = int(u_old.get("stars", 0) if u_old.get("stars", 0) > 0 else u_old.get("points", 0))
+
     DB.execute("UPDATE users SET stars = stars + ?, points = points + ? WHERE user_id = ?", (amount, amount, target.id))
     DB.commit()
 
-    u = dict(get_user(target.id))
+    u_new = dict(get_user(target.id))
+    new_bal = int(u_new.get("stars", 0) if u_new.get("stars", 0) > 0 else u_new.get("points", 0))
+
     await message.reply_text(
         f"<blockquote>✅ <b>Stars Added!</b>\n\n"
         f"👤 <b>User :</b> {get_mention(target)} (<code>{target.id}</code>)\n"
         f"⭐ <b>Added :</b> <code>+{amount} Stars</code>\n"
-        f"💰 <b>New Balance :</b> <code>{u.get('stars', 0)} Stars</code></blockquote>",
+        f"💰 <b>New Balance :</b> <code>{new_bal} Stars</code></blockquote>",
         parse_mode=enums.ParseMode.HTML
     )
+
+    # Channel/Group par Audit Log send karein
+    try:
+        await send_balance_modify_log(client, message.from_user, target, "add", amount, old_bal, new_bal)
+    except Exception as e:
+        print(f"[AddStar Log Err]: {e}")
 
 
 @Client.on_message(filters.command(["deductstar", "deductstars", "removestar", "removestars"], prefixes=VALID_PREFIXES))
@@ -217,17 +253,28 @@ async def deduct_stars_cmd(client: Client, message: Message):
         return await message.reply_text("ℹ️ **Usage:** `/deductstar @user 500` ya reply karein.")
 
     ensure_user(target)
+    u_old = dict(get_user(target.id))
+    old_bal = int(u_old.get("stars", 0) if u_old.get("stars", 0) > 0 else u_old.get("points", 0))
+
     DB.execute("UPDATE users SET stars = MAX(0, stars - ?), points = MAX(0, points - ?) WHERE user_id = ?", (amount, amount, target.id))
     DB.commit()
 
-    u = dict(get_user(target.id))
+    u_new = dict(get_user(target.id))
+    new_bal = int(u_new.get("stars", 0) if u_new.get("stars", 0) > 0 else u_new.get("points", 0))
+
     await message.reply_text(
         f"<blockquote>🔻 <b>Stars Deducted!</b>\n\n"
         f"👤 <b>User :</b> {get_mention(target)} (<code>{target.id}</code>)\n"
         f"🔻 <b>Deducted :</b> <code>-{amount} Stars</code>\n"
-        f"💰 <b>New Balance :</b> <code>{u.get('stars', 0)} Stars</code></blockquote>",
+        f"💰 <b>New Balance :</b> <code>{new_bal} Stars</code></blockquote>",
         parse_mode=enums.ParseMode.HTML
     )
+
+    # Channel/Group par Audit Log send karein
+    try:
+        await send_balance_modify_log(client, message.from_user, target, "deduct", amount, old_bal, new_bal)
+    except Exception as e:
+        print(f"[DeductStar Log Err]: {e}")
 
 
 # ============================================================
