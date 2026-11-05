@@ -10,13 +10,14 @@ from pyrogram.types import Message
 
 
 # ============================================================
-# 1. AUTO GIT UPDATE & RESTART (/update)
+# 1. AUTO GIT UPDATE & RESTART (/update) - OWNER & AUTH
 # ============================================================
 
 @Client.on_message(filters.command("update"))
 async def git_update_and_restart(client: Client, message: Message):
-    if not message.from_user or not is_owner(message.from_user.id):
-        return await message.reply_text("❌ Sirf Bot Owner hi bot ko update kar sakta hai.")
+    user_id = message.from_user.id if message.from_user else 0
+    if not is_owner(user_id) and not is_authed(user_id):
+        return await message.reply_text("❌ Sirf Bot Owner aur Auth Admins hi bot ko update kar sakte hain.")
 
     status_msg = await message.reply_text("<blockquote>🔄 <b>Stashing local edits & pulling updates from GitHub...</b></blockquote>", parse_mode=ParseMode.HTML)
 
@@ -177,7 +178,8 @@ async def admin_set_exp_cmd(client: Client, message: Message):
 # Command: /setdaily 200 (Sets 24hr daily reward)
 @Client.on_message(filters.command("setdaily"))
 async def admin_set_daily_bonus(client: Client, message: Message):
-    if not message.from_user or not is_authed(message.from_user.id):
+    user_id = message.from_user.id if message.from_user else 0
+    if not is_owner(user_id) and not is_authed(user_id):
         return await message.reply_text("❌ Only Auth Users & Owner can change daily bonus.")
 
     if len(message.command) < 2 or not message.command[1].isdigit():
@@ -192,7 +194,8 @@ async def admin_set_daily_bonus(client: Client, message: Message):
 # Command: /setbonus 500 (Sets Group Addition One-Time Bonus)
 @Client.on_message(filters.command("setbonus"))
 async def admin_set_group_bonus(client: Client, message: Message):
-    if not message.from_user or not is_authed(message.from_user.id):
+    user_id = message.from_user.id if message.from_user else 0
+    if not is_owner(user_id) and not is_authed(user_id):
         return await message.reply_text("❌ Only Auth Users & Owner can change group addition bonus.")
 
     if len(message.command) < 2 or not message.command[1].isdigit():
@@ -206,7 +209,8 @@ async def admin_set_group_bonus(client: Client, message: Message):
 
 @Client.on_message(filters.command(["setpoint", "setpoints"]))
 async def admin_set_points(client: Client, message: Message):
-    if not message.from_user or not is_authed(message.from_user.id):
+    user_id = message.from_user.id if message.from_user else 0
+    if not is_owner(user_id) and not is_authed(user_id):
         return await message.reply_text("❌ Only Auth Users & Owner can set puzzle points.")
 
     args = message.command
@@ -221,7 +225,8 @@ async def admin_set_points(client: Client, message: Message):
 
 @Client.on_message(filters.command(["sethint", "sethints"]))
 async def admin_set_hints(client: Client, message: Message):
-    if not message.from_user or not is_authed(message.from_user.id):
+    user_id = message.from_user.id if message.from_user else 0
+    if not is_owner(user_id) and not is_authed(user_id):
         return await message.reply_text("❌ Only Auth Users & Owner can set hint limits.")
 
     args = message.command
