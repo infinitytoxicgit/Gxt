@@ -134,13 +134,11 @@ async def safe_pin_and_clean(client, chat_id: int, message_id: int):
     # Agar auto_delete ON hai tabhi service pin alert delete hoga
     if auto_del:
         await asyncio.sleep(0.4)
-        # Direct targets: pinned message ke theek baad aane wali service notification IDs
         try:
             await client.delete_messages(chat_id, [message_id + 1, message_id + 2])
         except Exception:
             pass
 
-        # History scan fallback: agar alert ID alag generate hui ho to bhi delete ho jaye
         try:
             service_ids = []
             async for m in client.get_chat_history(chat_id, limit=5):
@@ -168,7 +166,6 @@ def _fetch_user_full_stats(user_id: int):
                 data["balance"] = u[2] if len(u) > 2 else 0
             else:
                 data["balance"] = u_dict.get("stars", 0) if u_dict.get("stars", 0) > 0 else u_dict.get("points", 0)
-                # Schema matching: check *_solved first, then fallback to *_correct
                 data["total_solved"] = u_dict.get("solved", u_dict.get("correct", 0))
                 data["easy_solved"] = u_dict.get("easy_solved", u_dict.get("easy_correct", 0))
                 data["med_solved"] = u_dict.get("medium_solved", u_dict.get("medium_correct", 0))
@@ -193,7 +190,6 @@ async def send_log_event(client: Client, user, chat, word: str, raw_guess: str, 
             old_balance = max(0, current_bal - points)
         new_balance = old_balance + points
 
-        # Ensure active puzzle completion is reflected immediately
         easy_cnt = u_stats["easy_solved"]
         med_cnt = u_stats["med_solved"]
         hard_cnt = u_stats["hard_solved"]
@@ -272,7 +268,12 @@ async def send_daily_claim_log(client: Client, user, reward: int, old_balance: i
             f"• <b>Transition :</b> <code>{old_balance:,}</code> <b>+</b> <code>{reward:,}</code> ➔ <code>{new_balance:,} pts</code></blockquote>"
         )
 
-        buttons = [[InlineKeyboardButton(f"👤 {user.first_name}", url=f"tg://user?id={user.id}")]]
+        buttons = [
+            [InlineKeyboardButton(f"👤 {user.first_name} ({user.id})", url=f"tg://user?id={user.id}")],
+        ]
+        if getattr(user, "username", None):
+            buttons.append([InlineKeyboardButton("🔗 Open Telegram Profile", url=f"https://t.me/{user.username}")])
+
         await client.send_message(
             chat_id=int(LOG_CHANNEL),
             text=log_text,
@@ -304,6 +305,8 @@ async def send_group_bonus_log(client: Client, user, chat, reward: int, old_bala
         buttons = [
             [InlineKeyboardButton(f"👤 {user.first_name} ({user.id})", url=f"tg://user?id={user.id}")],
         ]
+        if getattr(user, "username", None):
+            buttons.append([InlineKeyboardButton("🔗 Claimer Profile", url=f"https://t.me/{user.username}")])
         if getattr(chat, "username", None):
             buttons.append([InlineKeyboardButton("🏰 Target Group", url=f"https://t.me/{chat.username}")])
 
@@ -325,3 +328,52 @@ async def send_group_bonus_log(client: Client, user, chat, reward: int, old_bala
         )
     except Exception as e:
         print(f"[Group Bonus Log Error]: {e}")
+
+
+# ============================================================
+# 4. BALANCE AUDIT LOG (/addstar & /deductstar)
+# ============================================================
+async def send_balance_modify_log(client: Client, admin_user, target_user, action: str, amount: int, old_balance: int, new_balance: int):
+    """
+    Owner ya Auth Admin dwara kisi user ke balance me add ya deduct hone par Channel par audit log send karega.
+    """
+    if not LOG_CHANNEL or not get_global_config("logging_enabled", 1):
+        return
+
+    try:
+        is_add = action.lower() == "add"
+        action_title = "STARS / POINTS ADDED" if is_add else "STARS / POINTS DEDUCTED"
+        tag_emoji = "➕" if is_add else "🔻"
+        sym = "+" if is_add else "-"
+
+        admin_mention = get_mention(admin_user)
+        target_mention = get_mention(target_user)
+
+        log_text = (
+            f"<blockquote>{tag_emoji} <u><b>ADMIN AUDIT: {action_title}</b></u></blockquote>\n\n"
+            f"👮 <b>Executed By :</b> {admin_mention} (<code>{admin_user.id}</code>)\n"
+            f"👤 <b>Target User :</b> {target_mention} (<code>{target_user.id}</code>)\n"
+            f"🕒 <b>Timestamp :</b> <code>{time.strftime('%Y-%m-%d %H:%M:%S')}</code>\n\n"
+            "<blockquote>💰 <b>TRANSACTION DETAILS :</b>\n"
+            f"• <b>Action :</b> <code>{action.upper()}</code>\n"
+            f"• <b>Amount :</b> <b>{sym}{amount:,} Stars/Points</b>\n"
+            f"• <b>Balance Shift :</b> <code>{old_balance:,}</code> ➔ <code>{new_balance:,} Stars</code></blockquote>"
+        )
+
+        buttons = [
+            [
+                InlineKeyboardButton(f"👮 Admin ({admin_user.id})", url=f"tg://user?id={admin_user.id}"),
+                InlineKeyboardButton(f"👤 Target ({target_user.id})", url=f"tg://user?id={target_user.id}")
+            ]
+        ]
+        if getattr(target_user, "username", None):
+            buttons.append([InlineKeyboardButton("🔗 Target Profile Link", url=f"https://t.me/{target_user.username}")])
+
+        await client.send_message(
+            chat_id=int(LOG_CHANNEL),
+            text=log_text,
+            reply_markup=InlineKeyboardMarkup(buttons),
+            parse_mode=ParseMode.HTML
+        )
+    except Exception as e:
+        print(f"[Balance Modify Log Error]: {e}")
