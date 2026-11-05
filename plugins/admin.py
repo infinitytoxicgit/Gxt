@@ -174,7 +174,8 @@ async def admin_set_exp_cmd(client: Client, message: Message):
 # 5. REWARDS & BONUS CONFIG (/setbonus, /setdaily, /setpoints, /sethint)
 # ============================================================
 
-@Client.on_message(filters.command(["setbonus", "setdaily"]))
+# Command: /setdaily 200 (Sets 24hr daily reward)
+@Client.on_message(filters.command("setdaily"))
 async def admin_set_daily_bonus(client: Client, message: Message):
     if not message.from_user or not is_authed(message.from_user.id):
         return await message.reply_text("❌ Only Auth Users & Owner can change daily bonus.")
@@ -186,6 +187,21 @@ async def admin_set_daily_bonus(client: Client, message: Message):
     set_global_config("daily_bonus", val)
     set_global_config("daily_points", val)
     await message.reply_text(f"<blockquote>✅ <b>Daily Bonus Updated!</b>\nAmount: <code>+{val} Stars/Points</code></blockquote>", parse_mode=ParseMode.HTML)
+
+
+# Command: /setbonus 500 (Sets Group Addition One-Time Bonus)
+@Client.on_message(filters.command("setbonus"))
+async def admin_set_group_bonus(client: Client, message: Message):
+    if not message.from_user or not is_authed(message.from_user.id):
+        return await message.reply_text("❌ Only Auth Users & Owner can change group addition bonus.")
+
+    if len(message.command) < 2 or not message.command[1].isdigit():
+        return await message.reply_text("ℹ️ **Usage:** `/setbonus [amount]` (e.g. `/setbonus 500`)")
+
+    val = int(message.command[1])
+    set_global_config("bonus_points", val)
+    set_global_config("group_bonus", val)
+    await message.reply_text(f"<blockquote>🎉 <b>Group Addition Bonus Updated!</b>\nAmount: <code>+{val} Stars/Points</code></blockquote>", parse_mode=ParseMode.HTML)
 
 
 @Client.on_message(filters.command(["setpoint", "setpoints"]))
