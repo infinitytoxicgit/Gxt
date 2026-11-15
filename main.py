@@ -11,24 +11,9 @@ app = Client(
     api_id=API_ID,
     api_hash=API_HASH,
     bot_token=BOT_TOKEN,
+    max_concurrent_transmissions=2,
     plugins=dict(root="plugins")
 )
-
-async def auto_backup_task():
-    await asyncio.sleep(15)
-    while True:
-        try:
-            DB.commit()
-            if os.path.exists("jumble_game.db"):
-                await app.send_document(
-                    chat_id=int(OWNER_ID),
-                    document="jumble_game.db",
-                    caption=f"🤖 <b>Auto Backup:</b> <code>{time.strftime('%Y-%m-%d %H:%M:%S')}</code>",
-                    parse_mode=enums.ParseMode.HTML
-                )
-        except Exception as e:
-            print(f"[Auto Backup Error]: {e}")
-        await asyncio.sleep(21600)
 
 async def resume_all_active_games():
     from plugins.game_core import start_game
@@ -46,7 +31,7 @@ async def resume_all_active_games():
                 DB.execute("DELETE FROM games WHERE chat_id=?", (c_id,))
                 DB.commit()
                 await start_game(app, c_id, diff, c_id)
-                await asyncio.sleep(0.5)
+                await asyncio.sleep(1.0)
             except Exception as e:
                 print(f"[Auto-Resume Error in {c_id}]: {e}")
     except Exception as err:
@@ -59,7 +44,6 @@ async def main():
     print(f"✅ Online as @{me.username} (ID: {me.id})")
 
     asyncio.create_task(resume_all_active_games())
-    asyncio.create_task(auto_backup_task())
 
     await idle()
     await app.stop()
